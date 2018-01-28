@@ -1,0 +1,63 @@
+---
+title: '19703: Homework 1: Pt 1 - Recreating Situation B from Simmons et al. (2011)'
+author: "Prithvi Acharya"
+date: "January 28, 2018"
+output: pdf_document
+---
+
+```{r, include = FALSE, warning = FALSE, message = FALSE}
+library(knitr)
+require(knitr)
+setwd("C:/Users/prith/OneDrive/Documents/EPP/Courses/Spring 2018/19703")
+rm(list = ls())
+```
+
+   Simmons et al. (2011) conducted several simulations to show the effects of various scenarios on p-values. In \emph{Situation B}, they modeled the effect of adding observations to a sample dataset, after having conducted a \emph{t-test} and found the p-value to be greater than 0.05. To replicate the situation, I have made the following assumptions, that the authors also made:
+  
+* Two variables, \emph{willingness to pay}  and \emph{Liking} are each modeled as sets of standard random normal variables.
+* At first, twenty observations of each set are taken, and a t-test is conducted.
+* If the p-value is found to be <0.05, the test is stopped.
+* If the p-value is higher, ten additional observations are made for each set, and the t-test is conducted again.
+* This simulation is repeated 1,500 times, and results are reported as the % of these 1,500 simulations, where a p-value of <0.05 was found in either of the t-tests.
+
+   This simulation is represented in the code block below. Per the requirements of the \emph{optional HW section  2.7.1}, I created a GitHub account and have posted this code there, in addition to providing it below for your review.
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE, autodep=TRUE, fig.align='center'}
+no.of.sims <- 1500
+sig.count.10 <- 0 
+sig.count.05 <- 0
+sig.count.01 <- 0
+#using these variables to count how many simulations have results 
+#that are significant (at p = 0.1, 0.05,and 0.01 respectively).
+
+for(i in 1:no.of.sims){
+  liking <- rnorm(20,0,1) #first twenty observations of "liking"
+  wtp <- rnorm(20,0,1) #first twenty observations of "wtp"
+  p.20 <- t.test(liking, y = wtp)$p.value #p-value for first 20 obs.
+  liking <- c(liking, rnorm(10,0,1)) #adding 10 observations
+  wtp <- c(wtp, rnorm(10,0,1)) 
+  p.30 <- t.test(liking, y = wtp)$p.value #p-value for 30 obs.
+ 
+ sig.count.10 <- sig.count.10 + (p.20 < 0.10 | p.30 < 0.10)
+ sig.count.05 <- sig.count.05 + (p.20 < 0.05 | p.30 < 0.05)
+ sig.count.01 <- sig.count.01 + (p.20 < 0.01 | p.30 < 0.01)
+}
+
+sigs <- c(sig.count.10,sig.count.05,sig.count.01)
+sigs.percent <- as.data.frame(
+  paste0(signif((sigs/no.of.sims)*100,digits = 2),"%"))
+#converting the counts to % numbers
+#next few lines are mostly string manipulation to generate the results table
+#no math to see here.
+sig.levels <- as.data.frame(c("p < .1","p  < .05", "p < .01"))
+result <- cbind(sig.levels,sigs.percent)
+colnames(result) <- c("Significance Levels", "% of runs w/ significant results")
+
+```
+
+   The table of results (i.e. the \emph{result} dataframe) contains, as discussed, the percentage of the 1,500 simulations for which p-values lower than the three threshold levels were observed (in the totally random data), either in the initial instance with 20 observations, or after 10 more datapoints were collected. The table is presented below. As can be seen, the percentages are all significantly higher than what would be expected if the sample sizes were not increased with the specific intention of improving the odds of a low p-value.
+  
+```{r, warning=FALSE, message=FALSE, cache=TRUE, autodep=TRUE, fig.align='center'}
+kable(result) #printing the final result table.
+```
+\break
