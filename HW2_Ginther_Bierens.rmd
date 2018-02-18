@@ -1,0 +1,551 @@
+---
+title: '19-703: Homework II'
+author: "Prithvi S. Acharya"
+date: "February 18, 2018"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+```{r setup, include = FALSE, warning = FALSE, message = FALSE}
+rm(list = ls()) 
+library(knitr)
+require(dplyr)
+library(tibble)
+library(quantreg)
+library(AER)
+library(MASS)
+library(tidyr)
+library(ggplot2)
+setwd("C:/Users/prith/OneDrive/Documents/EPP/Courses/Spring 2018/19703")
+rm(list = ls())
+
+data(CPS1988)
+```
+\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](http://www.github.com/))
+
+## Replicating Tables  1A and 2A (Ginther & Bierens, 2001).
+
+### 1. Conduct the median (LAD) regressions. (1 point)
+
+To conduct the regressions, I used the \emph{rq} function from the \emph{quantreg} package, and the $CPS1988$ data, to develop two regression models, corresponding to each of tables 1A and 2A in the paper.
+```{r clean-raw-data,  echo = FALSE, message = FALSE, warning = FALSE}
+
+CPS1988$race  <- as.integer(CPS1988$ethnicity == 'afam')
+#converting to zeroes and ones
+
+CPS1988$log.wage <- log(CPS1988$wage)
+
+CPS1988$education <- as.integer(CPS1988$education)
+
+```
+```{r med-rgr-models, warning = FALSE}
+med.rgr.1a <- rq(log.wage ~ race + education + experience + 
+                     I(experience^2), data = CPS1988,
+                     tau = 0.5)
+                     #tau = 0.5 for median
+
+med.rgr.2a <- rq(log.wage ~ race + education + experience + 
+                   I(experience^2) + I(experience^3) +
+                   I(experience^4), data = CPS1988, 
+                   tau = 0.5)
+
+```
+```{r med-rgr-tables, echo = FALSE, message = FALSE}
+#trying to extract the coefficients, and replicate the tables
+#from (Gunther & Biersen, 2001)
+
+sm.1a <- as.data.frame(summary(med.rgr.1a)$coefficients[1:5,c(1,3)])
+row.names(sm.1a) <- c("1","race","ed","exper","exper^2")
+sm.1a <- rownames_to_column(sm.1a, var = "X")
+colnames(sm.1a) <- c("X","Estimates","t-values")
+
+sm.2a <- as.data.frame(summary(med.rgr.2a)$coefficients[1:7,c(1,3)])
+row.names(sm.2a) <- c("1", "race", "ed","exper","exper^2",
+                     "exper^3","exper^4")
+sm.2a <- rownames_to_column(sm.2a, var = "X")
+colnames(sm.2a) <- c("X", "Estimates","t-values")
+
+kable(sm.1a, row.names = F, caption = "Replication: Table 1A")
+
+kable(sm.2a, row.names = F, caption = "Replication: Table 2A")
+
+```
+
+### 2. Compare your results to those reported in the paper. (1 point)
+
+The results I obtained from my models have the same calculated coefficients as those obtained by the authors. However, my estimated \emph{t-values} are different  (though largely of the same order). Since the coefficients are identical, it is likely that I have been able to replicate the authors' model using the same raw data. The calculated \emph{t-values} are likely different because the authors used some different methods/assumptions to calculate them, than are the defaults in the \emph{quantreg} package.
+
+### 3. Briefly explain what you think the regression summaries mean (give it your best). (1 point for effort)
+
+Since the dependent variable is $log(wage)$, we \textbf{cannot} interpret the coefficients as showing the slope of a linear relationship between the feature in question  and the regressand.
+
+Here, we can say that a unit change in the feature multiplies the value of $log(wage)$ by the corresponding coefficient. So, for example in the replicated table 1A, we cna say that for each additional year of experience, $log(wage)$ increases by ~0.07, or, putting it another way:
+
+\emph{For every unit increase in years of education the predicted wage increases by about \$}$e^{0.07}$.
+
+## Extending the Results, using the Five Stories
+### 1. Use the first 20% of the data for the first 4 parts. Create histograms of the wages, log wages, education, and experience variables, with a summary of what you're seeing. (1 point)
+
+First, I used the \emph{rep} function to split the data randomly into 20/60/20 chunks for exploration, testing, and final model testing/prediction. Using the initial 20%, I conducted the following histograms.
+
+```{r split-data,message = FALSE,warning = FALSE }
+
+# Subsetting the data into 20/60/20
+splits <- rep(1:5, length.out = nrow(CPS1988))
+set.seed <- 500
+splits <- sample(splits)
+# using the 'filter' function in the 'dplyr' package
+explo.20 <- filter(CPS1988,splits == 1) 
+test.60 <- filter(CPS1988,splits != 1 & splits != 5)
+predict.20 <- filter(CPS1988,splits == 5)
+```
+```{r hist-wage, echo = FALSE, warning = FALSE, message = FALSE}
+#plotting histograms
+##wage
+hist(explo.20$wage,
+     breaks = "FD", #expecting outliers
+     main = "Calculated Wages", 
+     xlab = "Calculated Weekly Wage",
+     col = "grey",
+     bty = "n")
+
+hist(explo.20$wage,
+     breaks = "FD", #expecting outliers
+     main = "Calculated Wages (Truncated X-Axis Bounds)", 
+     xlab = "Calculated Weekly Wage",
+     xlim = c(0,3000),
+     col = "grey",
+     bty = "n")
+```
+As can be seen from these two versions of the histogram for $wage$, a majority of the wages appear to be lower than \$1,000. There also appears to be a small spike in the wages at about the \$2,500 mark. There also appear to be a smattering of values in the \$5,000 - \$10,000 range, and only one (possibly outlier) value past \$15,000.
+
+```{r hist-logwage,  echo = FALSE, message = FALSE,warning = FALSE }
+##log-wage
+hist(explo.20$log.wage,
+     breaks = "Scott", #log should be normal?
+     main = "Log-Wages", 
+     xlab = "Logarithm of Weekly Wage",
+     col = "grey",
+     bty = "n")
+```
+
+It is evident from the plot of $log(wage)$, this shows a distribution much closer to a normal distribution than the histogram of just $wage$. This would explain why the authors chose to use $log(wage)$ as their regressand for their paper. As compared to a normal distribution (at mean ~6), it appears to have a slight right skew (with a longer left tail).
+
+```{r hist-educ,  echo = FALSE, message = FALSE,warning = FALSE }
+##education
+hist(explo.20$education,
+     breaks = "FD",
+     main = "Years of Education", 
+     xlab = "Years of Education",
+     col = "grey",
+     bty = "n")
+```
+
+Since "Years of Education" takes discrete values at integer increments, the histogram also shows discrete bars accordingly. As expected there is a spike at 12 years (which probably corresponds to finishing high-school), with a maximum of 18 years. It also appears that there are relatively few observations where the "Years of Education" are less than 12.
+
+
+```{r hist-exp,  echo = FALSE, message = FALSE,warning = FALSE }
+##experience
+hist(explo.20$experience,
+     breaks = "FD",
+     main = "Possible Years of Experience", 
+     xlab = "Calculated Maximum Years of Experience",
+     col = "grey",
+     bty = "n")
+  
+
+```
+
+Immediately, one strange feature in the plot for $Experience$, is that the authors' calculation for the \emph{years of experience} somehow has been able to generate a sizeable number of negative values. Intuitively,this is rather silly and meaningless. They should probably have considered dropping these rows of data or adjusting their formula to have a floor at 0. The other observation from this plot is that most observations seem to fall in the 10-25 years range (unsurprising), with a mean (in this exploratory dataset) of 18.21 years.
+
+
+### 2. Compare wages and log wages to the normal distribution, with a  summary of what you think is going on. (1 point)
+
+The easiest way to compare a distribution such as this to the normal distribution would be to generate a \emph{quantile-quantile plot} of the data against a normal distribution. To do this I used the \emph{rnorm} function to generate a list of random variables normally distributed around the variable mean, and the \emph{qqplot} function to draw the Q-Q Plot.
+
+The Q-Q Plot for Wage shows that it has a very different distribution than the normal distribution, with a much larger number of observations lower than the mean, and with outliers off to the right (as can be seen by the steep inflection and almsot vertical line of the Q-Q Plot towards the latter quantiles).
+
+```{r qqplot-wage,  echo = FALSE, message = FALSE,warning=FALSE, fig.width = 7, fig.height = 7}
+set.seed <- 3300
+rnrm.wage <- rnorm(5000, mean = mean(explo.20$wage), 
+                   sd = sd(explo.20$wage))
+
+qqplot(rnrm.wage,explo.20$wage,
+       main = "Normal Q-Q Plot of Wages",
+       xlab = "Quantiles: Normal Distribution",
+       ylab = "Quantiles: Wage",
+       xlim = c(min(rnrm.wage,explo.20$wage), 
+                max(rnrm.wage,explo.20$wage)),
+       ylim = c(min(rnrm.wage,explo.20$wage), 
+                max(rnrm.wage,explo.20$wage)))
+abline(0,1,col = 'red')
+
+```
+Conversely the $log(wage)$ variable has a distribution much closer to the normal, again with a few far outliers off to the right, and a slightly heavier left tail (lower than the x = y line)  but a lighter right tail (again, lower than the x = y line).
+
+```{r qqplot-logwage,  echo = FALSE, message = FALSE,warning=FALSE , fig.width = 7, fig.height = 7}
+set.seed <- 3000
+rnrm.logwage <- rnorm(5000, mean = mean(explo.20$log.wage), 
+                   sd = sd(explo.20$log.wage))
+
+qqplot(rnrm.logwage,explo.20$log.wage,
+       main = "Normal Q-Q Plot of Log-Wages",
+       xlab = "Quantiles: Normal Distribution",
+       ylab = "Quantiles: Log-Wage",
+       xlim = c(min(rnrm.logwage,explo.20$log.wage), 
+                max(rnrm.logwage,explo.20$log.wage)),
+       ylim = c(min(rnrm.logwage,explo.20$log.wage), 
+                max(rnrm.logwage,explo.20$log.wage))
+       )
+abline(0,1,col = 'red')
+
+```
+
+### 3. Plot the regression residuals for the regressions in Tables 1.A and 2.A, using ordinary linear regression rather than median regression. Are there outliers? If so, what type are they? Would median regression or ordinary linear regression be more appropriate for these data? (1 point)
+
+
+To plot the jacknife residuals for a linear regression model, we can use the \emph{qqPlot} function  in the \emph{CAT} package. Given the propensity of outliers on both sides, it is evident that median regression was perhaps a good choice (as opposed to linear regression) which is more susceptible to influence by outliers. 
+
+```{r linreg, message = FALSE,warning=FALSE }
+
+l.reg.1a <- lm(log.wage ~ race + education + experience + 
+                     I(experience^2) + 1, 
+                     data = explo.20)
+
+l.reg.2a <- lm(log.wage ~ race + education + experience + 
+                   I(experience^2) + I(experience^3) +
+                   I(experience^4) + 1, data = explo.20)
+
+```
+```{r qqresid,message = FALSE, warning = FALSE, echo = FALSE}
+qqPlot(l.reg.1a,
+       main = "Residual QQ Plot: Linear Regression, Table 1A Features",
+       xlab = "t-Distr. Quantiles",
+       ylab = "Studentized Jack-knife Residuals")
+
+qqPlot(l.reg.2a,
+       main = "Residual QQ Plot: Linear Regression, Table 2A Features",
+       xlab = "t-Distr. Quantiles",
+       ylab = "Studentized Jack-knife Residuals")
+
+```
+
+### 5. Using median or ordinary linear regression, evaluate the backcasting quality of the Mincer type model (Table 1.A). Based on the results so far, propose a model (or a few) that you think are reasonable and worth testing using cross-validation. Then, use the middle 60% of the data to conduct 5-fold cross-validation. Evaluate your models, and assess whether the Mincer model is too complex. For whatever model you think is best, find its test error on the last 20% of the data. (1 point)
+
+#### Backcasting
+
+As discussed above, a linear regression is more suceptible to influence from outliers. Therefore I have used a median regression to generate a back-cast.
+
+```{r mse,message = FALSE,warning=FALSE}
+
+pred <- predict(med.rgr.1a, data = CPS1988)
+error <- pred-CPS1988$log.wage
+rMSE <- round(sqrt(sum(error^2)/length(error)),4)
+```
+```{r plot-reg-pred, echo = FALSE, message = FALSE, warning = FALSE, fig.width=6, fig.height=6}
+
+plot(pred,CPS1988$log.wage, 
+     main = "Backcasting using Mincer Model (Table 1A)",
+     xlim = c(min(CPS1988$log.wage), max(CPS1988$log.wage)),
+     ylim = c(min(CPS1988$log.wage), max(CPS1988$log.wage)),
+     xlab = "Log Wages (Predicted by Mincer Model)",
+     ylab = "Log Wages (Observed)")
+abline(0,1,col = "red")
+print(paste0("The root mean square error for this back-cast is ",rMSE,"."))
+
+```
+
+It seems from the $rMSE$ that generally the model is able to predict with some accuracy, the $log(wage)$ values. One oddity that is evident from the scatter-plot, is that the predicted values seem to max out at just over 7, whereas the actual values go all the way up to about 10.
+
+#### Developing my own models
+
+To develop my own model I first plotted scatter plots of the log-wage against several of the features in the $test$ (60%) dataset, using the $tidyr$ and $ggplot2$ packages.
+
+```{r find-features,  echo = FALSE, out.extra='angle=270', out.width = '\\maxwidth', fig.align = 'center',message = FALSE, warnings = FALSE}
+as.data.frame(test.60) %>%
+  gather( -log.wage, -race, key = "var", value = "value") %>%
+  ggplot(aes(x = value, y = log.wage,color = race)) +
+    geom_point() +
+    facet_wrap(~ var, scales = "free")
+```
+
+
+
+From these plots, it appears that log wage is related to education, but also that it has a relationship to whether or not the worker worked part-time, and to whether or not one lives in an SMSA region. It is also clear that the experience variable has a fair amount of noise, and may not necessarily be the best predictor of $log(wage)$. 
+
+On this basis, I propose to test the following three median regression models (code shown for the first one only:
+
+1. Log-wage ~ Education + Race.
+
+2. Log-wage ~ Education + Race + Parttime + SMSA
+
+3. Log-wage ~ Education + Experience + Race + Parttime + SMSA
+
+```{r cond-val1, message = FALSE, warning = FALSE}
+
+#Conducting 5-fold CV and calculating the mean MSE
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 8
+  folds <- sample(folds)
+  rMSE <- 0
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model <- rq(log.wage ~ education + race,tau = 0.5,data = train)
+    pred <- predict(model, newdata = test)
+    error <- test$log.wage - pred
+    root.mean.square.error <- sqrt(sum(error^2)/length(error))
+    rMSE <- rMSE + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+
+print(paste0("The mean rMSE for Model #1 was ",rMSE,"."))
+
+```
+```{r cond-val2, echo = FALSE, warning = FALSE, message = FALSE}
+
+
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 8
+  folds <- sample(folds)
+  rMSE <- 0
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model <- rq(log.wage ~ education + race + parttime + smsa,
+                tau = 0.5,data = train)
+    pred <- predict(model, newdata = test)
+    error <- test$log.wage - pred
+    root.mean.square.error <- sqrt(sum(error^2)/length(error))
+    rMSE <- rMSE + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+
+print(paste0("The mean rMSE for Model #2 was ",rMSE,"."))
+
+
+
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 8
+  folds <- sample(folds)
+  rMSE <- 0
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model <- rq(log.wage ~ education + experience + race + 
+                parttime + smsa,
+                tau = 0.5,data = train)
+    pred <- predict(model, newdata = test)
+    error <- test$log.wage - pred
+    root.mean.square.error <- sqrt(sum(error^2)/length(error))
+    rMSE <- rMSE + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+
+print(paste0("The mean rMSE for Model #3 was ",rMSE,"."))
+  
+
+```
+
+#### Testing simpler versions of the Mincer Model
+
+To test simpler versions of the Mincer Model, I used the same five-fold cross-validation as above, but by removing the $complex$ terms (in this case, the polynomial terms) with the following models:
+
+1. Mincer Model as originially presented
+
+2. Mincer Model without the $experience^{2}$ term.
+
+```{r cond-val3, echo = FALSE, message = FALSE, warning = FALSE}
+
+#Conducting 5-fold CV and calculating the mean MSE
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 8
+  folds <- sample(folds)
+  rMSE <- 0
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model <- rq(log.wage ~ race + education + experience + 
+                     I(experience^2), data = train,
+                     tau = 0.5)
+    pred <- predict(model, newdata = test)
+    error <- test$log.wage - pred
+    root.mean.square.error <- sqrt(sum(error^2)/length(error))
+    rMSE <- rMSE + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+
+print(paste0("The mean rMSE for the original Mincer Model was ",rMSE,"."))
+
+
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 8
+  folds <- sample(folds)
+  rMSE <- 0
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model <- rq(log.wage ~ race + education + experience,
+                data = train,
+                tau = 0.5)
+    pred <- predict(model, newdata = test)
+    error <- test$log.wage - pred
+    root.mean.square.error <- sqrt(sum(error^2)/length(error))
+    rMSE <- rMSE + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+
+print(paste0("The mean rMSE for Simple Mincer Model was ",rMSE,"."))
+
+```
+
+As can be seen, the $experience^{2}$ term appears to improve the quality of forecasting, however, this still is somewhat meaningless as a regressor, since, as discussed, there are some negative values for $experience$ and squaring them will treat those with $-2$ years experience at the same level as those with $2$ years, which is counterintuitive (and likely just wrong).
+
+#### Selecting a Model for Prediction
+
+Based on the above cross-validation results, it appears that the best forecasting model is the third model I proposed:
+
+\emph{A median regression  model with \textbf{Log-wage} regressed on \emph{Education + Experience + Race + Parttime + SMSA}}
+
+#### Prediction
+
+For prediction, I will use this model, but train it on the full testing data set (i.e. middle 60% of the raw data, as opposed to 4/5 of that set used in each CV iteration). Then, I use this model to predict on the last 20% of the data.
+
+```{r final-model, message = FALSE, warnings = FALSE}
+final.model <- rq(log.wage ~ education + experience + 
+              race + parttime + smsa,
+              tau = 0.5,data = test.60)
+
+predictions <- predict(final.model, newdata = predict.20)
+
+error <- predict.20$log.wage - predictions
+
+rMSE <- sqrt(sum(error^2)/length(error))
+
+rMSE <- round(rMSE, 4)
+
+```
+```{r print, echo = FALSE}
+
+print(paste0("The rMSE of predictions on the last 20% of the data was ",rMSE,"."))
+```
+
+### 6. On the last 80% of the data, conduct and discuss the statistical inference story for your proposed models. Explain why using confidence intervals would be valid or invalid for these data. (1 point)
+
+Per the authors' description of the data, the dataset contains sample data for:
+
+* men only,
+
+* of ages 18-70,
+
+* having a weekly income of at least $50 (and are not self-employed),
+
+* being either Caucasian or African-American only.
+
+It's difficult to imagine these criteria were randomly selected, and more importantly, I believe that this \emph{subsetted sample cannot forseeably be an \textbf{unbiased estimator} for any real population  set.}
+
+Given that, it may be unwise to make any statistical inferences on a larger population based on CPS data. Furthermore, even if we \emph{treat the dataset as the entire population}, it doesn't seem like any of the regression models are well-fitting enough to produce meaningful results. 
+
+The regression coefficient \emph{t-values} may appear to show there are discernible relationships, but we must remember that these \emph{t-values are susceptible to large sample sizes (such as CPS)}.
+
+Since \emph{random sampling} is a key assumption to the plotting and interpretation of confidence intervals, it would not be very meaningful to plot them for this data.
+
+However, let us assume that we can in-fact tell the statistical inference story. We could use the standard errors from a model, to develop 95% confidence intervals using the following formula:
+
+$$ CI = \beta_i \pm 1.96*SE_i$$
+
+$$\because SE_i = \sqrt{Var(\beta_i)}$$
+
+```{r conf-int, warning = F, message = F}
+
+#Extracting coefficients and error
+last.80 <- cbind(test.60,predict.20)
+inference.model <- rq(log.wage ~ education + experience + 
+              race + parttime + smsa,
+              tau = 0.5,data = last.80)
+coefs <- as.data.frame(summary(inference.model)$coefficients[
+  c(1:6),1])
+std.error <- as.data.frame(summary(inference.model)$coefficients[
+  c(1:6),2])
+std.error <- std.error*1.96
+mins <- coefs-std.error
+max <- coefs+std.error
+interval <- cbind(mins,max)
+
+```
+\newpage
+```{r conf-int-table,echo = FALSE, warning = FALSE, message=FALSE}
+colnames(interval) <- c("Min","Max")
+row.names(interval) <- c("Intercept","Education","Experience","Race","Part Time = Yes","SMSA = Yes")
+
+interval <- rownames_to_column(interval, var = "Regressor")
+
+kable(interval,
+      caption = "95% Confidence Interval for Regression Coefficients")
+
+```
+
+### 7. Discuss the causality story. To what degree do you think we can make causal claims about the regression models used? Explain your reasoning. Include a discussion of potential reverse causality, common causes, and risks of conditioning on a collider. (1 point)
+
+To establish actual causality, random assignment of the sample is required. \emph{Obviously,} this is not the case with the $CPS1988$ dataset, so it would be wrong to attempt establishing any causal link based on this data. Given that we can't possibly imagine that all possible confounding factors have been measured and recorded, there is a risk of common causes (for eg. some other factor, such as IQ etc. may be driving both education level and wage), or reverse causality (higher wage job workers may be more able to afford and attend higher education?). Especially when using variables like $Ethicity$ one should also be very careful of conditioning on a collider, since it's possible to build the model around common but unrelated effects (such as say possibly wage and $SMSA$), and show the link that doesn't actually exist.
+
+### 8. (Optional) Extend the data summary and/or conditional distribution stories in novel ways, either using methods covered in the lecture notes,or methods that you've developed yourself. (1-2 bonus points)
+
+#### eCDF Plots
+
+We can extend the data summary story by looking at the eCDF's of the regressand for certain subsets of the data.  For example, we can compare the eCDF of $log(wage)$ for participants of the two races to see if there are any obvious trends.
+
+```{r cdfplot, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 8, fig.width = 6, fig.align = 'center' }
+
+plot(ecdf(CPS1988$log.wage[CPS1988$ethnicity == "cauc"]),
+     col = "blue",
+     lwd = 1.5,
+     main = "eCDF of Log-Wage",
+     ylab = "Cumulative Probability",
+     xlab = "log(wage)",
+     verticals = TRUE,
+     do.points = FALSE)
+
+plot(ecdf(CPS1988$log.wage[CPS1988$ethnicity != "cauc"]),
+     col = "green",
+     lwd = 1.5,
+     verticals = TRUE,
+     do.points = FALSE,
+     add = TRUE)
+
+legend(3.25, .95,
+c("African-American","Caucasian"), # legend labels in order
+col = c("green","blue"), # colors for legend labels
+lty = c(1, 1),
+lwd = 1.5,
+bty = "n")
+
+```
+
+\emph{Clearly,} from this plot, we can see that while the two distributions approximate to the Log-Normal, the CDF of the green line is left-shifted when compared to the blue line. This shows that in the dataset, broadly speaking, African American CPS survey participants earned less than Caucasian participants.
+
+#### Cook's D
+
+Furthermore, we can extend the conditional distribution story by plotting the Cook's D, to understand the influence of various datapoints. Cook's Distances are only defined for \emph{linear regression models}, so to observe these plots, I have developed a linear regression model with the same features as the final model that I selected earlier, and plotted the Cook's Distance for those plots.
+
+```{r infindex, warnings = FALSE, message = FALSE}
+
+linear.final <- lm(log.wage ~ education + experience + 
+                     race + parttime + smsa,data = CPS1988)
+```
+```{r infindexplot, warnings = FALSE, echo = FALSE,message = FALSE}
+influenceIndexPlot(linear.final, id.n = 3)
+```
+Here we see that the three datapoints with the highest Cook's distance are observations in rows 2,780, 15,387 (very much the highest), and 18,199. We can now inspect the 15,387th observation, which has the highest Cook's distance (and a very high residual).
+
+```{r high-cook, warnings = FALSE, message = FALSE, echo = FALSE}
+
+hc <- CPS1988[15387,]
+kable(hc,
+      caption = "Observation with Highest Cook's D")
+
+```
+
+
+We can see here that this observation is for an individual with only three years of education total (very very low), but almost 60 years of experience (\emph{as calculated, not recorded} - which is exceptionally high), and has an outlandishly high wage (of over \$7,700 weekly), especially for someone with only a third-grade education level. It is possible this is a data-collection error, and requires further inspection.
