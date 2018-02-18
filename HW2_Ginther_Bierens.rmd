@@ -22,7 +22,7 @@ rm(list = ls())
 
 data(CPS1988)
 ```
-\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](http://www.github.com/))
+\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](https://github.com/acharyaprithvi/19703/blob/master/HW2_Ginther_Bierens.rmd))
 
 ## Replicating Tables  1A and 2A (Ginther & Bierens, 2001).
 
@@ -80,14 +80,14 @@ The results I obtained from my models have the same calculated coefficients as t
 
 Since the dependent variable is $log(wage)$, we \textbf{cannot} interpret the coefficients as showing the slope of a linear relationship between the feature in question  and the regressand.
 
-Here, we can say that a unit change in the feature multiplies the value of $log(wage)$ by the corresponding coefficient. So, for example in the replicated table 1A, we cna say that for each additional year of experience, $log(wage)$ increases by ~0.07, or, putting it another way:
+Here, we can say that a unit change in the feature multiplies the value of $log(wage)$ by the corresponding coefficient. So, for example in the replicated table 1A, we can say that for each additional year of experience, $log(wage)$ increases by a factor ~0.07, or, putting it another way:
 
-\emph{For every unit increase in years of education the predicted wage increases by about \$}$e^{0.07}$.
+\emph{For every unit increase in years of education the predicted wage increases by about}$e^{0.07}$ times.
 
 ## Extending the Results, using the Five Stories
 ### 1. Use the first 20% of the data for the first 4 parts. Create histograms of the wages, log wages, education, and experience variables, with a summary of what you're seeing. (1 point)
 
-First, I used the \emph{rep} function to split the data randomly into 20/60/20 chunks for exploration, testing, and final model testing/prediction. Using the initial 20%, I conducted the following histograms.
+First, I used the \emph{rep} function to split the data randomly into 20/60/20 chunks for exploration, testing, and final model testing/prediction. Using the initial 20%, I constructed the following histograms.
 
 ```{r split-data,message = FALSE,warning = FALSE }
 
@@ -262,7 +262,7 @@ It seems from the $rMSE$ that generally the model is able to predict with some a
 
 To develop my own model I first plotted scatter plots of the log-wage against several of the features in the $test$ (60%) dataset, using the $tidyr$ and $ggplot2$ packages.
 
-```{r find-features,  echo = FALSE, out.extra='angle=270', out.width = '\\maxwidth', fig.align = 'center',message = FALSE, warnings = FALSE}
+```{r find-features,  echo = FALSE, out.extra='angle=90', out.width = '\\maxwidth', fig.align = 'center',message = FALSE, warning = FALSE}
 as.data.frame(test.60) %>%
   gather( -log.wage, -race, key = "var", value = "value") %>%
   ggplot(aes(x = value, y = log.wage,color = race)) +
@@ -274,7 +274,7 @@ as.data.frame(test.60) %>%
 
 From these plots, it appears that log wage is related to education, but also that it has a relationship to whether or not the worker worked part-time, and to whether or not one lives in an SMSA region. It is also clear that the experience variable has a fair amount of noise, and may not necessarily be the best predictor of $log(wage)$. 
 
-On this basis, I propose to test the following three median regression models (code shown for the first one only:
+On this basis, I propose to test the following three median regression models:
 
 1. Log-wage ~ Education + Race.
 
@@ -284,7 +284,7 @@ On this basis, I propose to test the following three median regression models (c
 
 ```{r cond-val1, message = FALSE, warning = FALSE}
 
-#Conducting 5-fold CV and calculating the mean MSE
+#Conducting 5-fold CV and calculating the mean MSE for Model 1
   folds <- rep(1:5, length.out = nrow(test.60))
   set.seed <- 8
   folds <- sample(folds)
@@ -303,6 +303,7 @@ rMSE <- round(rMSE/5,4)
 print(paste0("The mean rMSE for Model #1 was ",rMSE,"."))
 
 ```
+Using similar code for the other two models,
 ```{r cond-val2, echo = FALSE, warning = FALSE, message = FALSE}
 
 
@@ -412,7 +413,7 @@ Based on the above cross-validation results, it appears that the best forecastin
 
 For prediction, I will use this model, but train it on the full testing data set (i.e. middle 60% of the raw data, as opposed to 4/5 of that set used in each CV iteration). Then, I use this model to predict on the last 20% of the data.
 
-```{r final-model, message = FALSE, warnings = FALSE}
+```{r final-model, message = FALSE, warning = FALSE}
 final.model <- rq(log.wage ~ education + experience + 
               race + parttime + smsa,
               tau = 0.5,data = test.60)
@@ -427,7 +428,10 @@ rMSE <- round(rMSE, 4)
 
 ```
 ```{r print, echo = FALSE}
-
+plot(predict.20$log.wage,predictions,
+     xlab = "log(wage) - Observed",
+     ylab = "log(wage) - Predicted")
+abline(0,1)
 print(paste0("The rMSE of predictions on the last 20% of the data was ",rMSE,"."))
 ```
 
@@ -474,7 +478,7 @@ max <- coefs+std.error
 interval <- cbind(mins,max)
 
 ```
-\newpage
+
 ```{r conf-int-table,echo = FALSE, warning = FALSE, message=FALSE}
 colnames(interval) <- c("Min","Max")
 row.names(interval) <- c("Intercept","Education","Experience","Race","Part Time = Yes","SMSA = Yes")
@@ -504,6 +508,7 @@ plot(ecdf(CPS1988$log.wage[CPS1988$ethnicity == "cauc"]),
      main = "eCDF of Log-Wage",
      ylab = "Cumulative Probability",
      xlab = "log(wage)",
+     xlim = c(3.5,9.5),
      verticals = TRUE,
      do.points = FALSE)
 
@@ -514,7 +519,7 @@ plot(ecdf(CPS1988$log.wage[CPS1988$ethnicity != "cauc"]),
      do.points = FALSE,
      add = TRUE)
 
-legend(3.25, .95,
+legend(3.55, .95,
 c("African-American","Caucasian"), # legend labels in order
 col = c("green","blue"), # colors for legend labels
 lty = c(1, 1),
@@ -529,17 +534,17 @@ bty = "n")
 
 Furthermore, we can extend the conditional distribution story by plotting the Cook's D, to understand the influence of various datapoints. Cook's Distances are only defined for \emph{linear regression models}, so to observe these plots, I have developed a linear regression model with the same features as the final model that I selected earlier, and plotted the Cook's Distance for those plots.
 
-```{r infindex, warnings = FALSE, message = FALSE}
+```{r infindex, warning = FALSE, message = FALSE}
 
 linear.final <- lm(log.wage ~ education + experience + 
                      race + parttime + smsa,data = CPS1988)
 ```
-```{r infindexplot, warnings = FALSE, echo = FALSE,message = FALSE}
+```{r infindexplot, warning = FALSE, echo = FALSE,message = FALSE}
 influenceIndexPlot(linear.final, id.n = 3)
 ```
 Here we see that the three datapoints with the highest Cook's distance are observations in rows 2,780, 15,387 (very much the highest), and 18,199. We can now inspect the 15,387th observation, which has the highest Cook's distance (and a very high residual).
 
-```{r high-cook, warnings = FALSE, message = FALSE, echo = FALSE}
+```{r high-cook, warning = FALSE, message = FALSE, echo = FALSE}
 
 hc <- CPS1988[15387,]
 kable(hc,
@@ -548,4 +553,4 @@ kable(hc,
 ```
 
 
-We can see here that this observation is for an individual with only three years of education total (very very low), but almost 60 years of experience (\emph{as calculated, not recorded} - which is exceptionally high), and has an outlandishly high wage (of over \$7,700 weekly), especially for someone with only a third-grade education level. It is possible this is a data-collection error, and requires further inspection.
+We can see here that this observation is for an individual with only three years of education total (very very low), but almost 60 years of experience (\emph{as calculated, not recorded} - which is exceptionally high), and has an outlandishly high wage (of over \$7,700 weekly), especially for someone with only a third-grade education level, and who works \emph{part-time}. It is possible this is a data-collection error, and requires further inspection.
