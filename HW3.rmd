@@ -1,0 +1,522 @@
+---
+title: '19-703: Homework III'
+author: "Prithvi Acharya"
+date: "March 9, 2018"
+output: pdf_document
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = T)
+rm(list = ls()) 
+library(knitr)
+library(car)
+require(dplyr)
+library(tibble)
+library(quantreg)
+library(AER)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(tidyr)
+library(ggplot2)
+library(mgcv)
+setwd("C:/Users/prith/OneDrive/Documents/EPP/Courses/Spring 2018/19703/")
+data(HousePrices)
+```
+\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](www.google.com))
+
+# Replication
+## 1. OLS Regression
+```{r replicate-OLS, message = F, warning = F}
+
+#Conducting the Regressions
+ols.tbl2 <- lm(log(price) ~ driveway + recreation + fullbase +
+                 gasheat + aircon + garage + prefer + 
+                 log(lotsize) + log(bedrooms) + log(bathrooms) +
+                 log(stories), data = HousePrices)
+
+ols.tbl3 <- lm(log(price) ~ driveway + recreation + fullbase +
+                 gasheat + aircon + garage + prefer + 
+                 log(lotsize) + bedrooms + bathrooms +
+                 stories, data = HousePrices)
+```
+```{r replication-tables, echo = F}
+
+
+s2 <- summary(ols.tbl2)$coefficients[1:12,c(1,3)]
+r.squared <- c(summary(ols.tbl2)$r.squared,NaN)
+adj.r.squared <- c(summary(ols.tbl2)$adj.r.squared,NaN)
+observations <- c(nrow(HousePrices),NaN)
+log.likelihood  <- c( as.numeric(logLik(ols.tbl2)), NaN)
+s2 <- rbind(s2,r.squared,adj.r.squared,observations,log.likelihood)
+kable(s2, row.names = T, digits = 3,
+      caption = "Replication: Table II")
+```
+
+
+\newpage
+
+
+```{r rep-tables-2, echo = F}
+s3 <- summary(ols.tbl3)$coefficients[1:12,c(1,3)]
+r.squared <- c(summary(ols.tbl3)$r.squared,NaN)
+adj.r.squared <- c(summary(ols.tbl3)$adj.r.squared, NaN)
+observations <- c(nrow(HousePrices),NaN)
+log.likelihood  <- c( as.numeric(logLik(ols.tbl3)), NaN)
+s3 <- rbind(s3,r.squared,adj.r.squared,observations,log.likelihood)
+kable(s3, row.names = T, digits = 4, 
+      caption = "Replication: Table III")
+
+```
+
+The replication tables above match (for both estimated coefficient, and $t$-statistic) the data tables reported by the authors exactly, with one exception being that in our replication of Table III, the coefficient for bedrooms is 0.034, as opposed to the authors' reported 0.344. This order-of-magnitude difference is rather unlikely to be a difference in model, and appears to be a printing/typographical error.
+
+## 2. Interpreting the Coefficients of DRV and LOT, and Discussion of Mean-Centering Variables.
+
+In both cases (Table II and Table III), the dependent variable, and the \textbf{DRV} variable have a \emph{log-level} relationship. That is to say, that the \% change in price is approximately equal to $100 \times \beta_{DRV}$, for homes which have a drive-way. Based on these two models, therefore, it appears that for homes with a driveway, the price of a house should be expected to increase by ~10.95\% - 11.02\%.
+
+For the \textbf{LOT}  variable, the relationship in Table II and Table III is \emph{log-log}. Therefore, the meaning is that a 1\% change in lot-size, leads to a $\beta_{LOT}\%$ change in the price of the house. Therefore, from the two models provided by the authors, it appears that for a 1\% increase in the lot area of a home, the price increase can be expected to be between 0.303\% and 0.313\%.
+
+As for standardizing and mean-centering variables, it is perhaps not required to conduct this for the large number of dummy variables (which can only take values of 0 or 1) that we have in this regression. The variable for number of garages, bedrooms, and bathrooms could be mean-centered, but since fractional numbers for these are meaningless and difficult to interpret, we may as well not conduct this transformation. Given that \textbf{LOT} is a continuous variable, and that a home cannot really have a lot-size of 0, it may be wise to mean-center this one variable. 
+
+\newpage
+
+# Five Stories
+## 1. Histograms
+First, I used the \emph{rep} function to split the data randomly into 20/60/20 chunks for exploration, training, and final model testing/prediction. Using the initial 20%, I constructed the following histograms.
+
+```{r split-data,message = F,warning = F }
+
+# Subsetting the data into 20/60/20
+splits <- rep(1:5, length.out = nrow(HousePrices))
+set.seed <- 19
+splits <- sample(splits)
+# using the 'filter' function in the 'dplyr' package
+explo.20 <- filter(HousePrices,splits == 1) 
+test.60 <- filter(HousePrices,splits != 1 & splits != 5)
+predict.20 <- filter(HousePrices,splits == 5)
+```
+```{r hist-price, echo = F, warning = F, message = F}
+#plotting histograms
+hist(explo.20$price,
+     breaks = "FD", #expecting outliers
+     main = "Home Prices", 
+     xlab = "Home Prices ($)",
+     col = "grey", bty = "n")
+
+hist(log(explo.20$price), breaks = "FD",
+         main = "Log of Home Prices", 
+         xlab = "Log of (Home Prices ($))",
+         col = "grey", bty = "n")
+```
+
+It is evident from the above plot that the log-transformed home price values show a nearly normal distribution (i.e. the house prices are log-distributed). We can reconfirm this by looking at the quantile-quantile plot of this distribution against a normal distribution. The modal house price appears to be \$50,000.
+
+```{r qqplot,  echo = F, message = F,warning=F, fig.width = 7, fig.height = 7}
+
+set.seed <- 200
+rnrm.logprice <- rnorm(1000, mean = mean(log(explo.20$price)), 
+                   sd = sd(log(explo.20$price)))
+
+qqplot(rnrm.logprice,
+       log(explo.20$price), 
+                         main = "Normal Q-Q Plot of Log(Price)",
+                         xlab = "Quantiles: Normal Distribution",
+                         ylab = "Quantiles: Log(Price)",
+                         xlim = c(min(rnrm.logprice,explo.20$wage),
+                                  max(rnrm.logprice,explo.20$wage)),
+                         ylim = c(min(rnrm.logprice,explo.20$wage),
+                                max(rnrm.logprice,explo.20$wage)))
+abline(0,1,col = 'red')
+
+```
+
+The Q-Q Plot confirms our initial suspicion that the data is close to normally distributed, but with very skinny tails.
+
+```{r hist-lots, echo = F, warning = F, message = F}
+#plotting histograms
+##wage
+hist(explo.20$lotsize,
+     breaks = "FD", #expecting outliers
+     main = "Lot Size", 
+     xlab = "Lot Size (Square Feet)",
+     col = "grey", bty = "n")
+
+hist(log(explo.20$lotsize),
+     breaks = "FD", #expecting outliers
+     main = "Log-Lot Size", 
+     xlab = "Log of Lot Size (Square Feet)",
+     col = "grey", bty = "n")
+
+```
+
+Similarly, lotsize appears to be log-distributed as well, with a modal value of around 3000-3500 square-feet. The  distribution appears to mimic the distribution of the dependent variable  - which is unsurprising.
+
+```{r hist-bedr, echo = F, warning = F, message = F}
+#plotting histograms
+##wage
+hist(explo.20$bedrooms,
+     breaks = "FD", #expecting outliers
+     main = "Bedroom Count", 
+     xlab = "Number of Bedrooms (#)",
+     col = "grey", bty = "n")
+
+```
+
+Most homes appear to have either two or three bedrooms. We could potentially envision this as a log-distribution as well, but it is difficult to tell with a discrete variable and such a small sample size.
+
+```{r hist-stor, echo = F, warning = F, message = F}
+#plotting histograms
+##wage
+hist(explo.20$stories,
+     breaks = "FD", #expecting outliers
+     main = "Number of Stories", 
+     xlab = "Number of Stories (#)",
+     col = "grey", bty = "n")
+
+```
+
+Most homes appear to be one or two stories, with a very small number having a higher number of stories. 
+
+\newpage
+
+## 2. Tables
+
+```{r tables, echo = F,warning = F,message =F}
+t <- as.data.frame(table(explo.20$driveway))
+colnames(t) <- c("Has Driveway?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$recreation))
+colnames(t) <- c("Has Rec-Room?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$fullbase))
+colnames(t) <- c("Has Finished Basement?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$gasheat))
+colnames(t) <- c("Has Gas Heating?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$aircon))
+colnames(t) <- c("Has Airconditioning?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$garage))
+colnames(t) <- c("Number of Garages","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$prefer))
+colnames(t) <- c("In Preferred Neighborhood?","Count")
+kable(t)
+
+```
+
+Since a substantial majority of houses have a drive-way and do not have a rec-room, it would be difficult to use these as regression features and make meaningful assertions about the effect of these variables on the home price. Very clearly, the same can also be said (in fact, much more clearly) about gas-heating. It might be possible to generate a regression model that excludes these three variables and is still a strong model.
+
+\newpage
+
+## 3. Gauss-Markoff Assumptions
+
+### Linear Parameters
+
+Obviously, it is impossible to ever know this for certain, but it is reasonable to believe that house-prices are a linear function of long list of variables, since we know that house prices increase with such factors as location, size, age, etc.
+
+### Random Sampling
+
+The data collected is on every individual house sold in one city (Windsor) in a three-month period. Since we are limiting ourselves to one city and a short period, it is difficult to claim that we have a random sample of house prices year-round for just that city, let alone for other cities or nationally across Canada. While we cannot quantify the resulting sampling error with the given data, we have to acknowledge that it exists and this assumption is violated.
+
+### Zero Conditional Mean (Omitted Variable Bias)
+
+It is difficult to imagine that the 6-7 variables considered by the authors are an exhaustive list. As I stated earlier, there are other factors (such as building age, location with relation to amenities and businesses etc.) which we know anecdotally affect house prices, but which aren't included in the authors' model. Therefore, we can probably assert that (as with most real-life implementations of regression models) this assumption is also violated.
+
+### No Perfect Collinearity (Invertibility of Gram Matrix)
+
+Since R converted all the n-factor variables into (n-1) dummy variables, we have avoided the dummy variable trap. Further, since the lm() function was run without error in both the cases above, we can assume that no variables needed to be dropped and that perfect collinearity was not observed - that this assumption is met by the authors' models.
+
+\newpage
+
+## 4. Jackknife and Box-Cox
+
+Since we want to look at residuals and use those to ascertain whether or not the \emph{log} was the correct transformation for the dependent variable, we will rebuild a model similar to Table 3, but WITHOUT the transformation of the 'price' variable.
+
+```{r newmodel, warning = F, message = F}
+ols.t3.bench <- lm(price ~ driveway + recreation + fullbase +
+                 gasheat + aircon + garage + prefer + 
+                 log(lotsize) + bedrooms + bathrooms +
+                 stories, data = explo.20)
+
+```
+```{r jacknifeplot, echo = F, message = F, warning = F}
+
+
+plot(fitted(ols.t3.bench), 
+     rstudent(ols.t3.bench),
+     ylab = "Jackknife Residuals",
+     xlab = "Fitted Values of Lot Size",
+     ylim = c(-4,4),
+     pch  = 10,
+     col  = "gray")
+abline(0,0, col = "red")
+
+
+qqPlot(ols.t3.bench, 
+       ylab = "Jackknife Residuals",
+       pch  = 10,
+       ylim = c(-4,4),
+       col  = "gray")
+
+```
+
+From the QQ-Plot of the jackknife residuals it seems reasonable to believe that the correct transformation was selected for the \textbf{LOT} variable. However, it is also clear that there is some heteroskedasticity, with  the residuals showing higher variance for larger lot sizes.
+
+To reconfirm that the log transform was appropriate for the \textbf{LOT} variable, we can plot the BoxCox function and observe if the value of $\lambda_{max}$ is appropriate.
+
+```{r  boxcox, warning = F, message = F}
+bc <- with(explo.20, 
+           boxCox(price ~ driveway + recreation + fullbase +
+               gasheat + aircon + garage + prefer + 
+               log(explo.20$lotsize) + bedrooms +             
+               bathrooms + stories, data = explo.20, 
+               family = "yjPower"))
+lambda.max <- bc$x[bc$y == max(bc$y)]
+print(paste0("The value of Lamba that maximizes the log-likelihood is ", round(lambda.max,4)))
+
+```
+
+This value is sufficiently close to $\lambda_{max} = 0$, with the zero value being well-within the plotted 95\% confidence intervals. Therefore, this reinforces our understanding that the log transform was indeed appropriate for the \textbf{LOT} variable.
+
+\newpage
+
+## 5. Component Plus Residual Plot
+
+Now, to understand whether the log transform on the \emph{lotsize} variable was appropriate, we can construct a linear model with the untransformed variable, and plot the component+residual for the variable from this model.
+
+```{r compres, warning = F, message = F}
+ols.t3.tidwell <- lm(log(price) ~ driveway + recreation + 
+                     fullbase + gasheat + aircon + garage + 
+                     prefer + lotsize + bedrooms + 
+                     bathrooms + stories, data = explo.20)
+
+crPlots(ols.t3.tidwell, terms = "lotsize", 
+        col = "grey", pch = 10,
+        xlab = "Lot Size (Sq Ft)",
+        ylab = "Component Plus Residual")
+```
+
+It is evident from the component+residual plot that since the conditional mean is not constantly zero, that a log transform may not mbe appropriate. Further, it  appears from the above plot that a power function (and not a polynomial) might be a better fit than the log transform used by the authors. To identify what power is appropriate, we can use Box-Tidwell Transformations. 
+
+```{r boxtidwell, warning = F, message = F}
+bt <- boxTidwell(log(price) ~ lotsize,
+                 other.x = ,
+                 data = explo.20)
+lambda.bt <- round(bt$result[3],4)
+print(paste0("The Box-Tidwell suggested value of Lambda is ",
+             lambda.bt))
+
+```
+
+The Box-Tidwell function suggested a $\lambda$ value of `r lambda.bt`. This means that the recommended transformation for the \textbf{LOT} variable is:
+
+$$y \propto LOT^{`r lambda.bt`}$$
+Therefore, this is the transformation I would suggest for LOT.
+
+\newpage
+
+## 6. Generalized Additive Model
+```{r gam,warning = F, message = F}
+g.add <- gam(log(price) ~ driveway + recreation + fullbase + 
+               gasheat + aircon + garage + prefer + 
+               s(lotsize) + bedrooms + bathrooms + stories,
+             data = explo.20)
+
+```
+
+```{r gamplot, echo = F, warning = F, message = F}
+
+plot(g.add, residuals = T, shade = T,
+     pch = 10,
+     cex = 1,
+     xlab = "Lot Size (Sq Ft)")
+
+```
+
+The GAM residual plot also suggests that a spline, or polynomial transformation is not required. This backs up our earlier assumptions based on the Component+Residual plot and the Box-Tidwell transformation.
+
+\newpage
+
+## 7. Forecasting Story
+
+To tell the forecasting story, we can use the 60% of the data reserved for testing, to conduct cross-validation on the three models discussed:
+
+* Authors' Original Model (Table III)
+* GAM 
+* My Model
+
+My model is similar to the benchmark except \textbf{LOT} is transformed based on the power transformation suggested by the BoxTidwell Function.
+
+
+```{r crossval, message = F, warning = F}
+
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 200
+  folds <- sample(folds)
+  rMSE <- c(0,0,0)
+  
+  test.60$lots2 <- ((test.60$lotsize)^lambda.bt)
+
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    
+    #First Model: Authors' Model
+    model1 <- lm(log(price) ~ driveway + recreation + fullbase +
+                 gasheat + aircon + garage + prefer + 
+                 log(lotsize) + bedrooms + bathrooms +
+                 stories, data = train)
+    error <- log(test$price) -  predict(model1, newdata = test)
+    root.mean.square.error <- sqrt(sum(error^2)/(length(error)-2))
+    rMSE[1] <- rMSE[1] + root.mean.square.error
+    
+    #Second Model: My Recommendation
+
+    model2 <- lm(log(price) ~ driveway + recreation + 
+                     fullbase + aircon + garage + 
+                     prefer + lots2 + bedrooms + gasheat +
+                     bathrooms + stories, data = train)
+    error <- log(test$price) - predict(model2, newdata = test)
+    root.mean.square.error <- sqrt(sum(error^2)/(length(error)-2))
+    rMSE[2] <- rMSE[2] + root.mean.square.error
+    
+    #Third Model: GAM
+    model3 <- gam(log(price) ~ driveway + recreation + fullbase + 
+               gasheat + aircon + garage + prefer + 
+               s(lotsize) + bedrooms + bathrooms + stories,
+               data = train)
+    error <- log(test$price) - predict(model3, newdata = test)
+    root.mean.square.error <- sqrt(sum(error^2)/(length(error)-2))
+    rMSE[3] <- rMSE[3] + root.mean.square.error
+  }
+rMSE <- round(rMSE/5,4)
+```
+
+
+```{r rmseTable, echo = F}
+rMSE <- cbind(c("Authors' Model","My Recommended Model","Generalized Additive Model"),rMSE)
+colnames(rMSE) <- c("Model","rMSE")
+kable(rMSE)
+```
+
+From the above table we can see that the Tidwell Transformation of Lot Size, along with dropping the three feature variables, performs marginally better (using rMSE as a metric) than the authors' model for Table III. My understanding of these results is that the authors' simplified assumption of a log transform for the \textbf{LOT} variable was perhaps reasonable, and there may not be any major omitted variable bias. However, let us now use the model I recommended to perform forecasting, to see if it performs nearly as well on that test, and ensure that it isn't overfit.
+
+```{r final-model, message = F, warning = F}
+final.model <- lm(log(price) ~ driveway + recreation + 
+                     fullbase + aircon + garage + gasheat +
+                     prefer + lots2 + bedrooms + 
+                     bathrooms + stories, data = test.60)
+
+predict.20$lots2 <- ((predict.20$lotsize)^lambda.bt)
+
+predictions <- predict(final.model, newdata = predict.20)
+
+error <- log(predict.20$price) - predictions
+
+rMSE <- sqrt(sum(error^2)/length(error))
+
+rMSE <- round(rMSE, 4)
+
+```
+
+
+```{r print, echo = F}
+plot(log(predict.20$price),predictions,
+     xlab = "log(wage) - Observed",
+     ylab = "log(wage) - Predicted",
+     xlim = c(min(log(predict.20$price), predictions),
+              max(log(predict.20$price), predictions)),
+     ylim = c(min(log(predict.20$price), predictions),
+              max(log(predict.20$price), predictions)))
+abline(0,1)
+print(paste0("The rMSE of predictions on the last 20% of the data was ",rMSE,"."))
+```
+
+
+The model performed equally well at prediction, so it is safe to conclude (to whatever degree is possible with such a small dataset), that the model was not overfitted, and is likely a higher quality model (if only marginally so) than the authors' original prediction.
+
+\newpage
+
+## 8. Robust vs. Standard Errors
+
+```{r robust-std, warning = F, message = F}
+library(lmtest)
+library(sandwich)
+c1 <- coeftest(model1)
+c2 <- coeftest(model1,vcov = vcovHC(model1, type = "HC0"), 
+df = df.residual(model1))
+se <- cbind(c1[,2],c2[,2], (c1[,2]-c2[,2])*100/c1[,2])
+```
+
+```{r robust-table, echo = F}
+colnames(se) <- c("Classical Errors", "Robust Errors", "% Difference")
+kable (se, digits = 4,
+caption = "Comparisons of Erros")
+```
+
+We can see here that in most cases, the robust and standard errors are similar (and within 10\% of each other). The largest difference is in the "stories" variable, followed by the "prefered neighborhood" and "gasheat" variables. As discussed earlier, all three of these variables contain one (or more) factor levels with a very small sample size (e.g homes without gas heat, or homes with more than two stories etc.). While heteroskedasticity may well be an explanation, we may see better model performance and less deviation between errors by simply being able to acquire more data for training the model.
+
+\newpage
+
+## 9. Other Stories
+
+### Statistical Inference
+
+It's difficult to imagine random selection, and more importantly, I believe that this \emph{subsetted sample of one city, and a three-month period cannot forseeably be an \textbf{unbiased estimator} for any real population  set.}
+
+Given that, it may be unwise to make any statistical inferences on a larger population based on only this data. The regression coefficient \emph{t-values} may appear to show there are discernible relationships, but we must remember that these \emph{t-values are susceptible to sample sizes}.
+
+Since \emph{random sampling} is a key assumption to the plotting and interpretation of confidence intervals, it would not be very meaningful to plot them for this data. However, let us assume that we can in-fact tell the statistical inference story. We could use the standard errors from a model, to develop 95% confidence intervals using the following formula:
+
+$$ CI = \beta_i \pm 1.96*SE_i$$
+
+$$\because SE_i = \sqrt{Var(\beta_i)}$$
+
+```{r conf-int, warning = F, message = F}
+
+#Extracting coefficients and error
+last.80 <- cbind(test.60,predict.20)
+last.80$lots2 <- ((last.80$lotsize)^lambda.bt)
+inference.model <- lm(log(price) ~ driveway + recreation + 
+                     fullbase + aircon + garage + gasheat +
+                     prefer + lots2 + bedrooms + 
+                     bathrooms + stories, data = last.80)
+coefs <- as.data.frame(summary(inference.model)$coefficients[
+  c(1:12),1])
+std.error <- as.data.frame(summary(inference.model)$coefficients[
+  c(1:12),2])
+std.error <- std.error*1.96
+mins <- coefs-std.error
+max <- coefs+std.error
+interval <- cbind(mins,max)
+
+```
+
+```{r conf-int-table,echo = FALSE, warning = FALSE, message=FALSE}
+colnames(interval) <- c("Min","Max")
+row.names(interval) <- c("Intercept","Driveway = Yes","RecRoom = Yes",
+                         "Finished Basement = Yes","Aircon = Yes","No. of Garage Spaces",
+                         "Gas Heat = Yes", "Prefered Neighborhood = Yes",
+                         "Box-Tidwell Transformed Lot Size","No. of Bedrooms","No. of Bathrooms",
+                         "No. of Stories")
+
+interval <- rownames_to_column(interval, var = "Regressor")
+
+kable(interval,
+      caption = "95% Confidence Interval for Regression Coefficients")
+
+```
+
+
+### Causality
+
+As discussed above, at least two, if not three of the four Gauss-Markoff assumptions are violated. Furthermore, random assignment is impossible in such a situation, and, this is a very small sample of just over 500 homes. Therefore, there is nothing to be said about causality other than that none of these models can possibly be used for causal inference.
