@@ -1,0 +1,415 @@
+---
+title: '19-704: Homework IV'
+author: "Prithvi Acharya"
+date: "March 29, 2018"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+```{r setup, include=F, warning = F, message = F}
+knitr::opts_chunk$set(echo = T)
+#rm(list = ls()) 
+library(knitr)
+library(car)
+require(dplyr)
+library(tibble)
+library(quantreg)
+library(AER)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(tidyr)
+library(ggplot2)
+library(mgcv)
+library(xtable)
+library(ROCR)
+setwd("C:/Users/prith/OneDrive/Documents/EPP/Courses/Spring 2018/19703/")
+data(SwissLabor)
+```
+\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](https://github.com/acharyaprithvi/19703/blob/master/HW4.rmd))
+
+# Replication
+
+## 1. Replication of Probit Regression
+```{r replicate, message = F, warning = F}
+
+SwissLabor$age.adj <- SwissLabor$age*10
+SwissLabor$foreign.adj <- (SwissLabor$foreign == "yes")*1
+SwissLabor$participation.adj <- (SwissLabor$participation == "yes")*1
+
+#Conducting the Regressions
+probit.tbl1 <- glm(participation.adj ~ age + I(age^2) + education + youngkids + 
+                     oldkids + income + foreign, data = SwissLabor,
+                     family = binomial(link = "probit"))
+
+
+```
+
+```{r replication-tables, echo = F}
+s2 <- summary(probit.tbl1)$coefficients[1:8,c(1,2)]
+neg.log.likelihood  <- c( as.numeric(logLik(probit.tbl1))*-1, NaN)
+s2 <- rbind(s2,neg.log.likelihood)
+rownames(s2)  <- c("Intercept","AGE","AGESQ","EDUC","NYC","NOC","NLINC","FOREIGN","-Log Likelihood")
+kable(s2, row.names = T, digits = 2,
+      caption = "Replication: Table I")
+```
+
+Here, we have successfully replicated the coefficients (for Switzerland) from Table I (Gerfin, 1996 pp.327), using the model provided by the author.
+\newpage
+
+# The Five Stories
+
+## 1. Histograms and Tables
+
+First, I used the \emph{rep} function to split the data randomly into 20/60/20 chunks for exploration, training, and final model testing/prediction. Using the initial 20%, I constructed the following histograms. One transformation was required for the $age$ variable before plotting, since, in the raw data, this is reported as $\frac{Age}{10}$, which is not as easily interpretable on a histogram. 
+
+
+```{r split-data,message = F,warning = F }
+
+# Subsetting the data into 20/60/20
+splits <- rep(1:5, length.out = nrow(SwissLabor))
+set.seed <- 40
+splits <- sample(splits)
+# using the 'filter' function in the 'dplyr' package
+explo.20 <- filter(SwissLabor,splits == 1) 
+test.60 <- filter(SwissLabor,splits != 1 & splits != 5)
+predict.20 <- filter(SwissLabor,splits == 5)
+```
+
+```{r hists, echo = F, warning = F, message = F}
+#plotting histograms
+par(cex = 1.3, mar = c(5, 5, 2, 1), mfrow = c(3, 2), cex.lab = 1.5, cex.axis = 1.5)
+
+hist(explo.20$age.adj, breaks = "FD", 
+     xlab = "Age (Years)",
+     col = "grey", bty = "n",
+     main = "") 
+
+hist(explo.20$education, breaks = "FD", 
+     xlab = "Education (Years)",
+     col = "grey", bty = "n",
+     main = "") 
+
+hist(explo.20$youngkids, 
+     xlab = "Number of Young Children",
+     col = "grey", bty = "n",
+     main = "") 
+
+hist(explo.20$oldkids, breaks = "FD", 
+     xlab = "Number of Older Children",
+     col = "grey", bty = "n",
+     main = "") 
+
+
+hist(explo.20$income, breaks = "FD", 
+     xlab = "Log of (Non-Labor Income)",
+     col = "grey", bty = "n",
+     main = "") 
+
+plot(explo.20$participation,explo.20$income,
+     xlab = "Participates in Labor Force?",
+     ylab = "Log Income",
+     ylim = c(8.5,12.5),
+     main = "", bty = "n")
+```
+
+From the histograms, we can see that most women surveyed are in the 25-40 year age-group, with an almost uniform distribution in that rage, there are fewer women older than 40, with only a handful of survey respondents being over 60 years old. 
+
+We see here that the years of education for participants is roughly normally distributed around 7-8 years, with a longer right tail.
+
+Most women have no children, with very few having one or two children (old or young). It would appear that more women in the survey have older children than they do younger children.
+
+```{r datsum-table, echo = F, warning = F, message = F}
+t <- as.data.frame(table(explo.20$participation))
+colnames(t) <- c("Participates in Labor Force?","Count")
+kable(t)
+
+t <- as.data.frame(table(explo.20$foreign))
+colnames(t) <- c("Permanent Foreign Resident?","Count")
+kable(t)
+
+```
+
+ We see in these tables that roughly 60% of survey respondents participate in the labor force, and rougly 30% are foreign residents. We can conclude that in both these cases, the survey data has a sufficient sample of the two groups being represented (which isn't to say that the sample is representative of the population).
+
+
+## 2. Logit Equation and Bernoulli Likelihood Function
+
+If we have to model the features from Table I in a logistical regression function, the logit function would be:
+
+$$ log{(\frac{p(x)}{1-p(x)})} =\beta_0 + (\beta_1 * age)+(\beta_2 * age^2) + (\beta_3 * education)  $$
+$$+ (\beta_4 * youngkids) + (\beta_5 * oldkids) + (\beta_6 * log(income)) + (\beta_7 * foreign) + e $$
+
+where $p$ is the probability that $participation = yes$.
+
+For the Bernoulli likelihood function we know that:
+$$ log{(\frac{p(x)}{1-p(x)})}  = \eta(x)$$
+
+We can apply the above substitution to the function, to get a likelihood as follows:
+The Bernoulli likelihood, $L$ is: 
+$$L(p(x)|y_i) = \prod_{i=1}^{n} (\frac{1}{1+e^{-\eta(x)}})^{y_i} \times (1 - \frac{1}{1+e^{-\eta(x)}})^{1-y_i}$$
+
+The logit link function works by linking the conditional mean ($p(x)$) of the population (which we don't observe), to $\eta(x)$ which is a linear predictor.
+
+It would not make sense to transform the dependent variable using a logit function. The dependent variable takes on values of either $0$ or $1$. Applying a logit transform will give us dependent variable values which are either $-\infty$ or $\infty$, which is utterly pointless.
+
+## 3. Logistic Regression
+
+We can use the $glm$ function to conduct the logistical regression equivalent of the aforementioned probit, by changing the \emph{link function} from our earlier model as follows:
+
+```{r logit, message = F, warning = F}
+
+log.tbl1 <- glm(participation.adj ~ age.adj + I(age.adj^2) + education + youngkids + 
+                     oldkids + income + foreign.adj, data = explo.20,
+                     family = binomial(link = "logit"))
+```
+```{r logit-tables, echo = F}
+s2 <- summary(log.tbl1)$coefficients[1:8,c(1,2)]
+neg.log.likelihood  <- c(as.numeric(logLik(log.tbl1))*-1, NaN)
+s2 <- rbind(s2,neg.log.likelihood)
+rownames(s2)  <- c("Intercept","AGE","AGESQ","EDUC","NYC","NOC","NLINC","FOREIGN","-Log Likelihood")
+kable(s2, row.names = T, digits = 2,
+      caption = "Logistic Regression: Table I Features")
+beta.ed <- s2[4,1]
+beta.ed.e <- round(exp(beta.ed), digits = 2)
+```
+
+
+
+Since $\beta_{EDUC}$ is `r beta.ed`, we can say that for every additional year of education recieved by a woman, this model predicts that the odds of them participating in the non-labor workforce (i.e. the odds that $participation = 1$) will increase by $e^{\beta_{EDUC}}$, i.e. for every additiona year of education, the probability of participation is `r beta.ed.e` times greater. We can make similar interpretations for NYC, NOC.
+
+For $FOREIGN$, we know that the probability of participation is $e^{\beta_{FOREIGN}}$ times greater if the woman has a foreign permanent residence.
+
+
+### Predicted Probability Against Age
+
+Here, we want to hold all other regressors at their mean, and predict the probability of participation solely as a function of the age.
+
+```{r mean-reg, warning = F, message = F}
+x <-  as.data.frame(cbind(mean(explo.20$income), 
+                          explo.20$age.adj, 
+                          mean(explo.20$education), 
+                          mean(explo.20$youngkids), 
+                          mean(explo.20$oldkids), 
+                          mean(explo.20$foreign.adj)))
+colnames(x) <- c("income","age.adj","education","youngkids","oldkids","foreign.adj")
+
+pred.prob <- predict(log.tbl1, newdata = x, type = "response")
+```
+```{r mean-reg-plots, message = F, echo = F, warning = F}
+plot(jitter(explo.20$age.adj, amount = 0.025), 
+     jitter(explo.20$participation.adj, amount = 0.025),
+     xlab = "Age (Years)",
+     ylab = "Probability (Predicted) of Participation",
+     bty = "n")
+
+preds <- as.data.frame.matrix(cbind(explo.20$age.adj, pred.prob))
+colnames(preds) <- c("Age","Predicted_Probability")
+preds <- preds[order(preds$Age),]
+lines(preds$Age,preds$Predicted_Probability, col = "blue")
+
+```
+
+It would seem that women are increasingly likely to participate in the labor force between the ages of 20 and and about 35. After that age, women are less likely to participate, as they get older.
+
+
+## 4. Creating Calibration Tables and Plots
+
+We can use a calibration plot to check if the model is misspecified.
+
+```{r calib-table, warning = F, message = F}
+#First, we rebuild the probit model, but using only our exploratory dataset.
+probit.explo <- glm(participation ~ age.adj + I(age.adj^2) + education + youngkids + 
+                     oldkids + income + foreign.adj, data = explo.20,
+                     family = binomial(link = "probit"))
+
+pred.prob <- predict(probit.explo, type = "response")
+
+decile.cutpoints <- quantile(pred.prob, probs = seq(0, 1, 0.1))
+
+decileID <- cut(pred.prob, 
+                breaks = decile.cutpoints, 
+                labels = c(1:10),
+                include.lowest = TRUE)
+expected1 <- tapply(pred.prob, decileID, FUN = sum)
+```
+
+```{r calib-plot, message = F, warning = F, echo = F}
+# Create cutpoints that represent the 9 intervals that exist for deciles 
+interval.cutpoints <- round(quantile(pred.prob, probs = seq(.1, 1, .1)), 2)
+
+# Create a dataframe with these cutpoints: 
+cal <- data.frame(interval.cutpoints)
+tab <- table(decileID, explo.20$participation)
+observed <- as.data.frame.matrix(tab)
+
+# Add a column of observed 1's
+cal$observed1 <- observed[, 2]
+
+
+# Add a column of expected 1's
+cal$expected1 <- round(expected1, 0)
+
+# Add a column for the total # of observations in each decile
+cal$total <- table(decileID)
+expected.rel <- as.numeric(cal$expected1/cal$total)
+observed.rel <- as.numeric(cal$observed1/cal$total)
+plot(expected.rel, 
+     observed.rel, 
+     ylab = "Empirical relative frequencies", 
+     xlab = "Predicted probabilities", 
+     xlim = c(0,1),
+     ylim = c(0,1),
+     main = "Calibration Plot: Probit Regression",
+     col = "blue",
+     bty = "n") 
+abline(0, 1, col = "grey")
+
+
+colnames(cal) <- c("Intercal Cutpoint","Observed Frequency (participate = 1)","Expected Frequency (participate = 1)", "Total")
+
+kable(cal, caption = "Calibration Table: Probit Regression")
+```
+
+We can see from the plot that the predicted probabilities match the measured relative frequencies quite closely, and the errors are more or less randomly distributed on either side of the $y = x$ line. Furthermore, the observed and expected frequencies from the table also tell the same story. Hence, we can assume that the model is in fact properly specified.
+
+## 5. Comparing Logit and GAM
+
+First , we build the GAM, and plot partial residual plots.
+```{r gam, warning = F, message = F}
+
+gam.smooth <- gam(participation.adj ~ s(age.adj) + s(education) + youngkids + 
+                     oldkids + income + foreign.adj, data = explo.20)
+```
+
+```{r gamplot, echo = F, warning = F, message = F}
+par(cex = 1.3, mar = c(5, 4, 2, 1), mfrow = c(1, 2))
+plot(gam.smooth, 
+     residuals = TRUE, 
+     shade = TRUE, 
+     pch = 10,
+     col = rgb(0, 0, 0, .3), 
+     cex = .5)
+```
+
+From the partial residual we can see that the age variable requires a transformation (and moreover that the $age^2$ transformation was likely correctly applied). Based on this small sample, it is harder to tell what the correct transformation for the $education$ variable would be - but it clearly appears not to be polynomial, and most likely does not require any further transformation.
+
+## 6. Stukel's Test (Optional)
+
+We can now use a Stukel's Test to Compare the Two Models. I have coded the Stukel's test based on example code provided in the notes/recitations, and while I have displayed the coefficients, it's unclear to me how to intepret them properly.
+```{r stukel, message = F, warning = F}
+
+# For Logit 
+eta.hat <- predict(gam.smooth, newdata = test.60)
+positive <- ifelse(eta.hat >= 0, 1, 0) 
+negative <- ifelse(eta.hat < 0, 1, 0) 
+eta.hat.sq <- eta.hat^2
+log.stukel <- glm(participation.adj ~ age.adj + I(age.adj^2) + education + youngkids + 
+                     oldkids + income + foreign.adj +
+                     eta.hat.sq:positive +
+                    eta.hat.sq:negative, data = test.60,
+                  family = binomial(link = "logit"))
+
+
+## For GAM
+eta.hat <- predict(gam.smooth, newdata = test.60)
+positive <- ifelse(eta.hat >= 0, 1, 0) 
+negative <- ifelse(eta.hat < 0, 1, 0) 
+eta.hat.sq <- eta.hat^2
+
+gam.stukel <- glm(participation.adj ~ age.adj + education + youngkids +
+                    oldkids + income + foreign.adj + eta.hat.sq:positive +
+                    eta.hat.sq:negative, data = test.60)
+
+```
+
+```{r stukel-tables,echo = F, message = F, warning = F}
+
+kable(summary(log.stukel)$coefficients, caption = "Logitic Regression Stukel Test Coefficients")
+
+kable(summary(gam.stukel)$coefficients, caption = "GAM Regression Stukel Test Coefficients")
+
+
+```
+
+## 7. Cross-Validated ROC Curves
+Now, to develop the cross-validated ROC curves, we first build two logit models. One without any complex variables, and another with the $Age^2$ variable - the transformation for $Age$ is based on the results of the earlier models, but most specifically, on the Partial Residual Plot from the GAM.
+
+Hence, the first step to develop ROC curves is to find cross-validated predictions for the two models, using the code below:
+
+```{r final-models, message = F, warning = F}
+
+  folds <- rep(1:5, length.out = nrow(test.60))
+  set.seed <- 300
+  folds <- sample(folds)
+  rMSE <- c(0,0)
+  m1.predictions <- c()
+  m1.labels <- c() 
+  m2.predictions <- c()
+  m2.labels <- c() 
+  for(i in 1:5){
+    train <- filter(test.60, folds != i)
+    test <- filter(test.60, folds == i)
+    model1 <- glm(participation.adj ~ age.adj + education + youngkids + 
+                     oldkids + income + foreign.adj, data = train,
+                     family = binomial(link = "logit"))
+                     
+    m1pred <- predict(model1, test, type = "response")
+    m1.predictions <- c(m1.predictions, m1pred)
+    m1.labels <- c(m1.labels, test$participation.adj)
+    
+    model2 <- glm(participation.adj ~ age.adj + I(age.adj^2) + education + youngkids + 
+                     oldkids + income + foreign.adj, data = train,
+                     family = binomial(link = "logit"))
+                     
+    m2pred <- predict(model2, test, type = "response")
+    m2.predictions <- c(m2.predictions, m2pred)
+    m2.labels <- c(m2.labels, test$participation.adj)
+    
+}
+```
+
+Now, we can calculate true and false positive rates at various points and plot them. 
+
+```{r roc, echo = F, warning = F, message  = F}
+m1err <- prediction(m1.predictions, m1.labels)
+m1perf <- performance(m1err, measure="tpr", x.measure="fpr")
+
+m2err <- prediction(m2.predictions, m2.labels)
+m2perf <- performance(m2err, measure="tpr", x.measure="fpr")
+
+
+plot(m1perf, 
+     col = "green", 
+     main = "Cross-Validated ROC Curves", 
+     avg = 'threshold', 
+     spread.estimate = 'stddev',
+     print.cutoffs.at = seq(.0, .9, by = 0.1),
+     text.adj = c(-.5, 1.2), 
+     xlab = "Average False Positive Rate", 
+     ylab = "Average True Positive Rate") 
+
+abline(0, 1) 
+plot(m2perf, 
+     col = "yellow", 
+     avg = 'threshold', 
+     spread.estimate = 'stddev', 
+     print.cutoffs.at = seq(.0, .9, by = 0.1),
+     text.adj = c(-.5, 1.2),
+     xlab = "Average False Positive Rate",
+     ylab = "Average True Positive Rate", add = TRUE)
+
+abline(0, 1)
+
+```
+
+From the curves, it appears that neither model is particularly good at having a low false-positive rate. However, the logistic model with the squared term for age \textbf{(Yellow Line)} appears to slightly outperform the model without transformation.
+
+
+## 8. Statistical Inference and Causality Story
+
+Since the raw data has less than 900 data-points, and these were collected through an optional survey of women in Switzerland, we can expect there to be a significant selection bias in who responded to the survey. Furthermore, the survey occured in 1981 amongst only married women - so what \emph{population} do they really represent? Therefore, it is beyond obvious that there was no random selection in the sample. This, combined with the high potential for omitted variable bias, leads us to the conclusion that we really can't make any statistical inferences.
+
+There are many externalities that lead to participation in the workforce - such as health, other family responsibilities etc., which cannot be accurately measured. Furthermore, there are other quantifiable variables (such as access to reasonable jobs, etc.) which were not measured. These omitted variables (in addition to potentially several others) mean that the data cannot and should not be used for any causal inference.
+
