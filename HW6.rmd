@@ -1,0 +1,556 @@
+---
+title: '19-704: The Last Homework'
+author: "Prithvi Acharya"
+date: "April 29, 2018"
+output: pdf_document
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = T)
+rm(list = ls()) 
+library(knitr)
+library(car)
+require(dplyr)
+library(tibble)
+library(AER)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(tidyr)
+library(ggplot2)
+library(Ecdat)
+library(mgcv)
+library(plm)
+library(arm)
+
+setwd("C:/Users/prith/OneDrive/Documents/EPP/Courses/Spring 2018/19703/")
+data("Cigar", package = "Ecdat")
+
+```
+\emph{This PDF assignment is accompanied by a} .rmd \emph{file, containing all the code. Additionally, the code for this assignment can be found on my Github Repository.}([link](https://github.com/acharyaprithvi/19703/blob/master/HW6.rmd))
+
+## Replication
+
+### 1. Replicating Table 1
+
+First, based on definitions in the [data dictionary](https://rdrr.io/cran/Ecdat/man/Cigar.html), but more importantly based on the assertion by [Huang et al](http://www2.southeastern.edu/orgs/ijae/RePEc/IJAE%20Sept%202004%20A6%20Huang%20Yang%20Hwang%2009%2024%2004%20RV4%20OKOK.pdf)  that the data were all "deflated by CPI" , we applied some transformations to the dependent and independent variable as follows:
+
+```{r replic, message = F, echo = F}
+
+Cigar <- pdata.frame(Cigar, index = c("state", "year"))
+Cigar$adj.sales <- Cigar$sales
+Cigar$adj.pastsales <- lag(Cigar$adj.sales,1)
+Cigar$adj.price <- Cigar$price/Cigar$cpi
+Cigar$adj.pimin <- Cigar$pimin/Cigar$cpi
+Cigar$adj.ndi <- Cigar$ndi/Cigar$cpi
+
+cplt.pooling <- lm(log(adj.sales)~log(adj.pastsales) + 
+                     log(adj.price) + 
+                     log(adj.pimin) + 
+                     log(adj.ndi), data = Cigar)
+
+
+
+time.dummies <- lm(log(adj.sales)~log(adj.pastsales) + 
+                     log(adj.price) + 
+                     log(adj.pimin) + 
+                     log(adj.ndi) +
+                     factor(year),
+                   data = Cigar)
+
+within <- plm(log(adj.sales) ~ log(adj.pastsales) + 
+                 log(adj.price) + log(adj.pimin) +
+                 log(adj.ndi) + factor(year) + factor(state),
+               model = "within", data = Cigar)
+```
+
+```{r sumtable, echo = F}
+s <- summary(cplt.pooling)$coefficients
+summary <- s[,1]
+s <- summary(time.dummies)$coefficients
+summary2 <- s[c(1:5),1]
+s <- summary(within)$coefficients
+summary3 <- s[c(1:5),1]
+
+summ <- cbind.data.frame(summary,summary2,summary3)
+colnames(summ) <- c("OLS", "OLS with Dt","Within")
+
+summ <- t(summ)
+colnames(summ) <- c("Intercept","ln C(t-1)","ln P","ln Pn","ln Y")
+
+kable(summ, digits = 2)
+
+```
+
+### 2. Reproducibility
+
+Evidently, I have been able to reproduce the results here, but not without some angst. The authors (at least in this paper) make very unclear how they transformed their variables. They cite Baltagi & Levin (1986) which was quite difficult to procure online. Had it not been for a chance find of the Hunag paper (written in 2004, as a commentary on the original Baltagi paper), I would simply not have been able to reproduce the results. \textbf{Nowhere in the original paper do the authors mention that they deflated the dependent variables by CPI.} Even with that knowledge, it took me a while to figure out that the transformation was not $\frac{x}{CPI}$ but $\frac{x}{\frac{CPI}{100}}$. 
+
+Obviously, the authors did not pay sufficient attention to reproducability. While they took the effort to make their raw data public (a commendable step in the right direction), it was very unclear how they transformed their variables.
+
+To make results more reproducible, authors must:
+
+* Make raw data available.
+* Clearly state assumptions and data transformations.
+* Potentially, provide any code they used so others may be able to replicate results.
+
+
+### 3. Interpreting OLS Result
+
+The interpretation of a log-log OLS is that for a 1% increase in $x_i$ causes a $\beta_i$% increase in $y_i$. i.e. in this case, a 1% increase in the lagged price means the predicted increase in sales per capita will be 0.97%. Similarly, for a 1% increase in per capita non-disposable income, we see a 0.03% increase in the sale of cigarettes, etc. Price has a negative coefficient, implying that a 1% price increase will lead to a decrease in sales of about 0.08%, etc. 
+
+## Extension
+
+### 1. Five Stories
+
+The five stories are:
+
+* Data Summary Story
+* Conditional Distribution  Story
+* Forecasting Story
+* Statistical Inference Story
+* Causal Inference Story
+
+The most important stories to tell are the statistical inference story and perhaps the conditional distribution story, since these speak to the strength of any statistical model which we propose. 
+
+The story I believe is often most neglected is the data summary story - which is often forgotten since it is typically not very publishable, and most authors prefer to  focus on diving straight into model development.
+
+It is easy to confuse the statistical inference story with the causality story, and perhaps to some degree, confuse the statistical inference story with the conditional distribution  story, but they are distinct from each other, both in intention, and execution.
+
+Perhaps the story that comes most naturally to us is the conditional distribution story, once we have seen and processed the data summaries.
+
+We are often expected to tell the statistical inference story, (with t-tests and such) even though these are really not applicable unless there is true random sampling.
+
+### 2. Transformation of the Dependent Variable
+
+To test whether a log transform is appropriate, the first thing we can do is plot the histogram of a sample 20% (i.e., data from 20% of the states, to retain panel data format) of the data to see what the  distributions in general look like.
+
+```{r split, message = F}
+states <- row.names(table(Cigar$state))
+set.seed(35)
+states <- sample(as.numeric(states))
+explo.20 <- filter(Cigar,Cigar$state %in% states[c(1:9)])
+eval.20  <- filter(Cigar,Cigar$state %in% states[c(10:18)])
+test.60 <- filter(Cigar,Cigar$state %in% states[c(19:46)])
+
+```
+
+
+```{r hist-dep, echo= F, message = F}
+
+par(mfrow=c(1,2))
+hist(explo.20$adj.sales,
+     breaks ="FD",
+     xlab = "Sales",
+     main = "",
+     bty = "n",
+     col = "grey")
+
+hist(log(explo.20$adj.sales),
+     breaks ="FD",
+     xlab = "Log(Sales)",
+     main = "",
+     bty = "n",
+     col = "grey")
+
+```
+
+Next, we look at BoxCox transformation for the "Sales" variable, with no regressors.
+
+```{r boxcox, echo = F}
+par(mfrow=c(1,1))
+bc <- boxCox(explo.20$adj.sales ~ explo.20$adj.pastsales + 
+                     explo.20$adj.price + 
+                     explo.20$adj.pimin + 
+                     explo.20$adj.ndi, data = explo.20)
+lambda <- bc$x[bc$y == max(bc$y)]
+```
+
+We see the value of $\lambda = 1$ is well within the 95% calculated interval; the exact calculated value of $\lambda$ was `r round(lambda,digits = 4)`. Hence, a log transformation seems rather inappropriate. Assuming $\lambda$ to be 1, we can assert that it's likely that no transformation whatsoever is needed for the dependent variable. We could also potentially use a transformation of $y^{\lambda}$.
+
+The log transform is typically used since it is easy to apply and interpret. Especially in econometrics/social sciences studies where a log-log analysis' coefficients are basically the "rate of change". In this case, I believe it is appropriate for the dependent variable.
+
+\newpage
+### 3. Log Transform  for Independent Variables.
+
+Again, the first step here is to look at the histograms.
+
+```{r transform-indep, echo = F}
+par(mfrow=c(2,2))
+
+hist(explo.20$adj.pastsales,
+     breaks ="FD",
+     xlab = "Lagged Sales",
+     main = "",
+     bty = "n",
+     col = "lightcyan4")
+
+hist(log(explo.20$adj.pastsales),
+     breaks ="FD",
+     xlab = "Log(Lagged Sales)",
+     main = "",
+     bty = "n",
+     col = "lightcyan4")
+
+#
+
+hist(explo.20$adj.price,
+     breaks ="FD",
+     xlab = "Price",
+     main = "",
+     bty = "n",
+     col = "bisque4")
+
+hist(log(explo.20$adj.price),
+     breaks ="FD",
+     xlab = "Log(Price)",
+     main = "",
+     bty = "n",
+     col = "bisque4")
+#
+
+hist(explo.20$adj.pimin,
+     breaks ="FD",
+     xlab = "Min Price in Adj. State",
+     main = "",
+     bty = "n",
+     col = "antiquewhite3")
+
+hist(log(explo.20$adj.pimin),
+     breaks ="FD",
+     xlab = "Log(Min Price in Adj. State)",
+     main = "",
+     bty = "n",
+     col = "antiquewhite3")
+
+#
+hist(explo.20$adj.ndi,
+     breaks ="FD",
+     xlab = "Per Capita Disposable Income",
+     main = "",
+     bty = "n",
+     col = "navajowhite3")
+
+hist(log(explo.20$adj.ndi),
+     breaks ="FD",
+     xlab = "Log(Per Capita Disposable Income)",
+     main = "",
+     bty = "n",
+     col = "navajowhite3")
+
+```
+
+Based on these plots, we can see that the log transformation was, while perhaps not optimal for the regressors, it is also not a terrible idea. However, as I stated earlier, log-log models are simply very straightforward to interpret, which might explain why the authors chose to apply the transformation across all regressors.
+
+Additionally, to get a better sense of whether or not the transformations were appropriate we can develop a generalized additive model, and look at the partial residual plot to better understand whether or not the transform applied was appropriate.
+
+First, we do this with a log-transformed regressand (as the authors did).
+
+```{r part-resid, echo = F}
+
+par(mfrow=c(2,2))
+
+gam.log <- gam(log(adj.sales) ~ s(adj.pastsales) + 
+                          s(adj.price) + 
+                          s(adj.pimin) +
+                          s(adj.ndi) +
+                          factor(year) +
+                          factor(state),
+                        data = explo.20)
+
+plot(gam.log, 
+     residuals = T, 
+     shade = T)
+
+```
+
+Next, we do the same thing, but this time, with no transformation applied to the dependent variable (as suggested by our BoxCox $lambda$ of 1)
+
+```{r gamnotrns, echo = F}
+
+gam.no.transform <- gam(adj.sales ~ s(adj.pastsales) + 
+                          s(adj.price) + 
+                          s(adj.pimin) +
+                          s(adj.ndi) +
+                          factor(year) +
+                          factor(state),
+                        data = explo.20)
+
+plot(gam.no.transform, 
+     residuals = T, 
+     shade = T)
+
+```
+
+In the first case (log transformed regressand) we see that three of the four regressors show linear plots, with the NDI variable showing a curve that appears to indicate the need for a log transformation (or some kind of transformation). For the second case (no transformation for regressand), it seems that the log relationship holds for the NDI, and the $price$ and $pimin$ plots are fairly linear. However, the $lagged-price$ partial residual plot shows several inflections indicating the need for some kind of polynomial transformation. Hence, the authors' idea to log-transform the dependent variable sidesteps the need for this polynomial transformation, and therefore is appropriate.
+
+### 4. Residuals
+
+```{r residplot, echo = F}
+par(mfrow=c(1,2))
+plot(fitted(cplt.pooling), 
+     rstudent(cplt.pooling), 
+     xlab = "Fitted Values", 
+     ylab = "Jackknife Residuals", 
+     pch = 19, 
+     main = "OLS w/ Complete Pooling",
+     col = rgb(0, 0, 0, 0.3))
+lines(lowess(fitted(cplt.pooling), 
+             rstudent(cplt.pooling)), 
+      col = "green", 
+      lwd = 2)
+
+qqPlot(cplt.pooling, 
+       ylab = "Jackknife Residuals")
+
+plot(fitted(time.dummies), 
+     rstudent(time.dummies), 
+     xlab = "Fitted Values", 
+     ylab = "Jackknife Residuals", 
+     pch = 19, 
+     main = "OLS w/ Time Dummies",
+     col = rgb(0, 0, 0, 0.3))
+lines(lowess(fitted(time.dummies), 
+             rstudent(time.dummies)), 
+      col = "green", 
+      lwd = 2)
+
+qqPlot(time.dummies, 
+       ylab = "Jackknife Residuals")
+
+plot(fitted(within), 
+     residuals(within), 
+     xlab = "Fitted Values", 
+     ylab = "Jackknife Residuals", 
+     pch = 19, 
+     main = "Within Pooled Model",
+     col = rgb(0, 0, 0, 0.3))
+lines(lowess(fitted(within), 
+             residuals(within)), 
+      col = "green", 
+      lwd = 2)
+
+qqPlot(residuals(within), 
+       ylab = "Jacknife Residuals")
+```
+
+One thing to note here is that the PLM function does not have the ability to directly generate studentized residuals from models. Therefore, for the panel data, I simply used the $residuals$ as generated by the function. I imagine these are not standardized in any way.
+
+When comparing the residuals for the first two models, it seems like the second model (OLS w/ Time Dummies) is, if anything worse off (the extremities of the QQ-Plot deviate much further, albeit perhaps more symmetrically) from the normal. The residuals in both cases are more or less symmetrically distributed.
+
+In the case of the panel data model, we see a distinctive bowing in the middle of the fitted-vs-residual plot, and no major improvement to the QQ Plot.
+
+
+There don't seem to be any specific "problems" in the residuals. The main "problems" that we would see are associated with misspecified models or omitted variables. If we see the slope of the fitted-vs-residual plot is clearly in one direction or the other, we can assume the model is misspecified, and look into one of three things:
+
+* Identifying what variables may be missing
+* Transforming the regressors
+* Transforming the regressand.
+
+
+### 5. Partial Pooling Model
+
+I constructed the partial pooling (within) model as follows, now using the test (60%) data:
+
+```{r partialpool, warning = F,message=F}
+
+part.pool.within <-  lmer(log(adj.sales)~log(adj.pastsales) + 
+                     log(adj.price) + 
+                     log(adj.pimin) + 
+                     log(adj.ndi) + 
+                       (1|year) + 
+                       (1|state), 
+                     data = test.60)
+
+```
+
+Now, looking at the residual components (from random effects) of this model:
+```{partpooltable}
+s <- summary(part.pool.within)
+s <- s$varcor
+s <- as.data.frame(s)
+s <- s[,c(1,2,5)]
+colnames(s) <- c("Groups","Name","Std. Dev.")
+kable(s, digits = 4)
+```
+
+We see three variance components:
+
+1. $\sigma^2_s$ - the variance of the intercept, by state
+
+2. $\sigma^2_y$ - the variance of the intercept by year
+
+3. $\sigma^2_r$ is the residual variance, and is a measure of how much the intercept varies by state and year, assuming a normal distribution. 
+
+Now, to compare it to the original pooled within model, I trained the authors model with the 60% test data set, and compared the residuals (the grey denotes the partially pooled model, and the green, the authors original within pooled model). 
+
+```{r within2, echo = F}
+par(mfrow=c(1,1))
+within.test <- plm(log(adj.sales) ~ log(adj.pastsales) + 
+                 log(adj.price) + log(adj.pimin) +
+                 log(adj.ndi) + factor(year) + factor(state),
+               model = "within", data = test.60)
+
+y <- test.60$sales
+resid.1 <- residuals(part.pool.within)
+resid.2 <- as.numeric(residuals(within.test))
+
+plot(resid.1, 
+     xlab = "Index",
+     ylab = "Residuals",
+     pch = "X",
+     cex = 0.6,
+     col = "grey35")
+
+points(resid.2,
+       pch = "X",
+       cex = 0.6,
+       col= "green")
+
+
+
+
+```
+
+It may also be worthwhile to look at the actual coefficients of the models:
+
+```{r coef-compare,echo=F}
+
+s <- summary(part.pool.within)
+s <- s$coefficients
+s <- s[,1]
+s2 <- summary(within.test)
+s2 <- s2$coefficients
+s2  <- s2[c(1:4),1]
+sx <- vector(length = 5)
+sx[1] <- NA
+sx[c(2:5)] <- s2
+summ <- cbind.data.frame(s,sx)
+row.names(summ) <- c("Intercept","ln C(i-1)","ln P","ln Pn","ln Y")
+colnames(summ) <- c("Partial Pooling", "Authors' Model")
+kable(summ, row.names = T,digits = 4)
+
+
+```
+It is clear here that the two models have different coefficients, with some cases (e.g.  the $NDI$ variable) having a massive difference of several orders of magnitude. Since there are these large differences, partial pooling model is likely misspecified, so we should probably use the within model.
+
+
+### 6. Strict Exogeneity Assumptions
+
+For a panel data model, the \emph{strict exogeneity} assumption is based on three elements:
+
+1. \textbf{Conteporaneous Exogeneity}, i.e. \emph{omitted variable bias}. 
+While omitted variables are a risk, we may be able to claim that the authors' within model does not have this problem. As stated in the notes, "within... regressions allow us to worry less about confounders that are constant across time for each unit."
+
+2. \textbf{Backward Exogeneity}, i.e. \emph{errors are uncorrelated with regressors from a previous time period}. 
+
+We can check this by looking at the lagged regressand plotted against the errors (below, we plot residuals  as a function of lagged sales). As we see there is a slight negative slope showing some relationship, but it is practically a zero-slope, showing that this assumption holds.
+
+3.  \textbf{Forward Exogeneity}, i.e. \emph{errors are uncorrelated with regressors from a future time period}.
+
+This assumption does not hold in any of the models, since lagged sales are used as a regressor.
+
+```{r exogen, echo = F}
+
+res <- within.test$residuals
+y <- test.60$adj.pastsales
+y <- y[is.na(y) == F]
+
+par(mfrow=c(1,1))
+plot(y,res,
+     xlab = "Lagged Sales",
+     ylab = "Within Model Residuals",
+     bty = "n",
+     cex = 0.7)
+lines(lowess(y, res), 
+      col = "green", 
+      lwd = 2)
+
+```
+
+### 7. Four Policies
+
+The four policies mentioned by Baltaggi are federal/national level rules, which means they apply across all states. However, since they apply at the same time in all states  there are some years where they don't apply at all, and some where they apply to all data for those years. Presumably, since the Within model proposed by the authors controls for time (and the time dummy model does too), the effects of these policies are captured through those assumptions.
+
+Difference-in-Difference model may not work since as I mentioned earlier, when a policy applies, it applies to all data for that time period, so there are really no states where it does not apply  - we would need some data from a state where the policy doesn't apply to conduct difference-in-difference.
+
+If we had the data for this (eg. if some states implemented a new policy while others didn't), we could create a regression model with dummy variables for $policy$, indicating whether or not a policy applied to a particular state, and also a complex variable for $policy x year$ showing when the policy applied in each state. Using these regressors we could build a Difference-in-Difference model.
+
+### 8. One Year Ahead
+
+Here, I created a new trainign data set without the last year's data, and trained an OLS and a Within model with these. 
+
+For \textbf{year-ahead} predictions, I used the data from year '92 as the test set, but fed the model "91" value in the year place, to create a "year ahead" prediction. (This may not be a correct assumption - I am unsure - this is why I have provided the code below for you to see what I did and if it is right)
+```{r yearahead, warning  = F, message = F}
+
+train.yearahead <- filter(test.60,test.60$year != '92')
+
+linear.ya <- lm(log(adj.sales)~log(adj.pastsales) + 
+                     log(adj.price) + 
+                     log(adj.pimin) + 
+                     log(adj.ndi), data = train.yearahead)
+
+  
+within.ya <- lm (log(adj.sales) ~ log(adj.pastsales) + 
+                 log(adj.price) + log(adj.pimin) +
+                 log(adj.ndi) + factor(year) + factor(state),
+                data = train.yearahead)
+
+test.yearahead <- filter(test.60, test.60$year == 92)
+test.yearahead$year <- 91
+
+linear.pred <- predict(linear.ya, newdata = test.yearahead)
+within.pred <- predict(within.ya, newdata = test.yearahead)
+
+
+```
+
+We can plot the predicted values against the actual (sales)  values, and calculate an MSE to compare the prediction capability of the models.
+
+```{r plotthis, echo = F}
+y.s <- log(test.yearahead$adj.sales)
+
+par(mfrow=c(1,2))
+
+plot(y.s,linear.pred,
+     xlab = "Actual Log Sales (Year 1992)",
+     ylab = "Predicted Value - OLS Year Ahead Model",
+     bty = "n")
+abline(0,1, col = "grey")
+
+plot(y.s,within.pred,
+     xlab = "Actual Log Sales (Year 1992)",
+     ylab = "Predicted Value - Within Pooling Year Ahead Model",
+     bty = "n")
+abline(0,1, col = "grey")
+
+rmse.linear = round(sqrt(sum((linear.pred-y.s)^2)),
+                    digits = 4)
+rmse.within = round(sqrt(sum((within.pred-y.s)^2)),
+                    digits = 4)
+
+```
+
+The rMSE of the linear model was `r rmse.linear`, and that of the within model was `r rmse.within`. It would appear that the OLS model is a slightly better predictor of year-ahead sales than the within model? Again, I am unsure here, but I believe that since the policies change over time, the OLS model is not really adjusting for that correctly, and therefore, in spite of the higher rMSE, the Within model is more appropriate.
+
+### 9. Robust Standard Errors
+
+Using the `vcovHC` function, we can derive the heteroskedastic, homoskedastic and serial errors.
+```{r stderror, echo = F}
+hom.error <- coef(summary(within.test))[ c(1:4), 2]
+het.error <- coeftest(within.test, vcov = function(x) vcovHC(x, method = "white1", 
+                                                             type = "HC0", cluster = "group"))
+het.error <- het.error[c(1:4),2]
+serial.error <- coeftest(within.test, vcov = function(x) vcovHC(x, method = "arellano", 
+                                                                type = "HC0", cluster = "group"))
+serial.error <- serial.error[c(1:4),2]
+
+errors <- cbind.data.frame(hom.error,het.error,serial.error)
+colnames(errors) <- c("Homoskedastic Errors","Heteroskedastic Errors","Serial Errors")
+kable(errors, row.names = T, digits = 4)
+
+```
+
+Generally speaking the serial errors appear to be higher than the heteroskedastic errors, which in turn appear to be higher than the homoskedastic errors, but not by as much. From this table, we can say that \emph{heteroskedasticity and serial correlation} both contribute to overall errors in the model.
+
+The "Population" we are using is data from 48 (presumably the lower 48) states, which is really a very representative sample of all 50 states. For a panel data model where we are making predictions at a "state" level, if we really are representing all the states in our data sample, then no, we don't really need standard errors.
