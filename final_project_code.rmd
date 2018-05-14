@@ -1,0 +1,470 @@
+---
+title: "Predicting Vehicle Emissions Inspection Results"
+subtitle: "19-704 Final Project: Code"
+author: "Prithvi S. Acharya"
+date: "May 12, 2018"
+output: 
+  pdf_document: 
+    keep_tex: yes
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+#setup chunk
+#loading required packages, setting file location
+library(knitr)
+library(car)
+library(caret)
+require(dplyr)
+library(tibble)
+library(quantreg)
+library(AER)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(tidyr)
+library(ggplot2)
+library(mgcv)
+library(xtable)
+library(ROCR)
+library(readr)
+library(OptimalCutpoints)
+library(lubridate)
+files.loc <- "C:/Users/prith/OneDrive/Documents/EPP/Research/CO Emissions Data/Comparing/"
+```
+
+```{r split, echo = FALSE, eval = FALSE}
+#reading in raw data which has:
+# OBD MIL results + 
+# IM240 results +
+# Count of Codes by type (i.e. first two digits) +
+# Vehic demographics (age, odometer reading, etc.)
+# For all CO concurrent OBD/IM240 tests, 2010-2017
+raw <- read_csv(paste0(files.loc,"code_counts.csv"))
+raw <- filter(raw,complete.cases(raw) == TRUE)
+
+#seperating out passing and failing tests,
+#(based on IM240 - i.e. regressand -  result)
+fail <- filter(raw,raw$V_IM240 == 1)
+pass <- filter(raw, raw$V_IM240 == 0)
+
+# creating stratified data sample
+# 50-50 Pass/Fail
+pass <- sample_n(pass, size= nrow(fail),
+                 replace = FALSE)
+final <- rbind(pass,fail)
+final <- sample_n(final, size=nrow(final))
+rm(pass, fail,raw)
+# To reduce the number of factors, creating a new variable
+# "MANF",which represents the OEM of the vehicle's make
+# for e.g., VW,Audi,and and Lamborghini "Make", 
+# will all be VW "MANF".
+
+manf <- read.csv(paste0(files.loc,"parent_manf.csv"))
+colnames(manf) <- c("V_MAKE","PARENT")
+m <- match(final$V_MAKE, table = manf$V_MAKE, nomatch = NA)
+g <- manf[m,2]
+g[is.na(g) == TRUE] <- "OTHR"
+final$V_MANF <- g
+rm(g,m,manf)
+final$V_P_CODES <- rowSums(final[,c(25:97)])
+final$V_EMISSION_CODES <-  rowSums(final[,c(26,27,29)])
+#Emission Codes are P01,P02,P04 codes
+final$V_NON_P_CODES <- rowSums(final[,c(16:24,98:108)])
+#Non P-Codes are U/B/C codes; should have no relationship
+#to emissions results, but may trigger MIL
+```
+
+```{r split-data, echo = F, eval = F}
+#Splitting the STRATIFIED data into 20/60/20,
+# for exploration, model selection, and prediction
+splits <- rep(1:5, length.out = nrow(final))
+set.seed(160)
+splits <- sample(splits)
+# using the 'filter' function in the 'dplyr' package
+explo_20 <- filter(final,splits == 1) 
+test_60 <- filter(final,splits != 1 & splits != 5)
+predict_20 <- filter(final,splits == 5)
+write.csv(explo_20, file = paste0(files.loc,"explo_20.csv"),
+          row.names = F)
+write.csv(test_60, file = paste0(files.loc,"test_60.csv"),
+          row.names = F)
+write.csv(predict_20, file = paste0(files.loc,"predict_20.csv"),
+          row.names = F)
+
+rm(test_60,predict_20,final,splits)
+```
+
+```{r perc, echo = F, message = F, warning = F}
+#loading initial 20% for exploratory analysis
+explo_20 <- read_csv(paste0(files.loc,"explo_20.csv"))
+
+#building "confusion matrix table"
+t1 <- c("IM240 Pass(%)","","")
+t2 <- c("IM240 Fail(%)","","")
+t <- rbind(t1,t2)
+colnames(t) <- c("","OBD Pass (%)","OBD Fail (%)")
+
+t[1,2] <- round(100*nrow(filter(explo_20, 
+                      explo_20$V_IM240 == 0 &
+                        explo_20$V_OBD_MIL == 0))/nrow(explo_20),
+                digits = 2)
+t[1,3] <- round(100*nrow(filter(explo_20, 
+                      explo_20$V_IM240 == 0 &
+                        explo_20$V_OBD_MIL == 1))/nrow(explo_20),
+                digits = 2)
+
+t[2,2] <- round(100*nrow(filter(explo_20, 
+                      explo_20$V_IM240 == 1 &
+                        explo_20$V_OBD_MIL == 0))/nrow(explo_20),
+                digits = 2)
+
+t[2,3] <- round(100*nrow(filter(explo_20, 
+                      explo_20$V_IM240 == 1 &
+                        explo_20$V_OBD_MIL == 1))/nrow(explo_20),
+                digits = 2)
+
+kable(t, 
+      caption = "Relationship Between Test Results (% of Sample)",
+      row.names = F)
+
+```
+
+```{r data-summary-story-3, echo = FALSE}
+#table of percentage of fleet by manufacturer
+makes <- as.character(explo_20$V_MANF)
+makes <- table(makes)
+makes <- as.data.frame(makes)
+makes <- makes[order(-makes[,2]),]
+makes[,3] <- round(makes[,2]/sum(makes[,2])*100,
+                   digits = 2)
+colnames(makes) <- c("Make","Count","% of Sample")
+kable(makes, row.names = FALSE,
+      caption="% of Sample,  by Vehicle Manufacturer")
+rm(makes,t)
+
+t <- table(explo_20$V_TR_NO)
+t[6] <- sum(t[c(6:20)])
+t <- t[c(1:6)]
+t <- as.data.frame(t)
+t[,1] <- as.character(t[,1])
+t[6,1] <- "More Than 4"
+t$perc <- t[,2]*100/sum(t[,2])
+colnames(t) <- c("No. of Codes", "No. of Test Instances", "% of Test Instances")
+kable(t, caption = "Number of Trouble Codes",
+      row.names = F,digits = 2)
+
+```
+
+```{r data-summary-4, echo = F, dpi = 50}
+#odometer histogram and QQPlot
+par(mfrow = c(1,2))
+hist(explo_20$V_ODOMETER/1000,
+     breaks = "FD",
+     main = "",
+     xlab = "Odometer Reading (x1000, Mi)",
+     xlim = c(0,750),
+     ylab = "Count")
+
+r <- rnorm(length(explo_20$V_ODOMETER),
+           mean = mean((explo_20$V_ODOMETER/1000), na.rm = T),
+           sd = sd((explo_20$V_ODOMETER/1000), na.rm = T))
+
+qqplot((explo_20$V_ODOMETER/1000),r,
+       xlab = "Random Normal Distribution Quantiles",
+       ylab = "Odometer Reading (x1000, mi) Quantiles",
+       xlim= c(0,500),
+       ylim = c(0,500))
+abline(0,1,col="red")
+
+
+```
+```{r data-summary-5, echo = F,dpi = 50}
+#vehicle age histogram and QQPlot
+par(mfrow = c(1,2))
+hist(explo_20$V_AGE,
+     breaks = "Scott",
+     main = "",
+     xlab = "Age (Years)",
+     ylab = "Count")
+
+r <- rnorm(length(explo_20$V_AGE),
+           mean = mean(explo_20$V_AGE, na.rm = T),
+           sd = sd(explo_20$V_AGE, na.rm = T))
+
+qqplot(explo_20$V_AGE,r,
+       xlab = "Quantiles",
+       ylab = "Age (Years)")
+abline(0,1)
+
+xnam <- colnames(explo_20)
+
+#GAM with all the regressors
+xnam.gam <-xnam[c(3,6,12,13,15:108)]
+#applying smoothing on age and odometer
+xnam.gam[4] <- "s(V_ODOMETER)"
+xnam.gam[6] <- "s(V_AGE)"
+fml.gam <- as.formula(paste0("V_IM240 ~ ",
+                             paste(xnam.gam,collapse = "+")))
+#buidling the model
+modelgam <- gam(fml.gam, data = explo_20)
+
+#plotting residuals for these two variables
+plot(modelgam,residuals = TRUE,rug = TRUE,shade = TRUE)
+
+
+```
+```{r logreg, message= F,warning =F}
+#exploratory logistic regression model
+#first 20% of data, all regressors
+exes <- colnames(explo_20)
+#identifying x's and y,
+exes.0 <- c(exes[c(3,6,15:112)],"(V_VEH_YEAR*V_MANF)",
+            "(V_TR_NO*V_MANF)","(V_TR_NO*V_OBD_MIL)",
+            "(V_ODOMETER/V_AGE)")
+regressand <- "V_IM240"
+fmla.0 <- as.formula(paste0(regressand,"~ ", paste(
+  exes.0[exes.0!=""], collapse = "+")))
+#building the model
+logreg.0  <- glm(fmla.0, data = explo_20,
+               family = binomial(link = "logit"))
+```
+
+```{r Varimp, echo = FALSE}
+#printing the variable importances from the above model
+s <- summary(logreg.0)
+v <- varImp(logreg.0)
+v <- cbind(as.character(rownames(v)),v)
+colnames(v) <- c("Parameter","Score")
+v <- v[order(-v$Score),]
+rownames(v) <- c(1:nrow(v))
+kable(v, caption = "Variable Importances", digits = 3,
+      row.names = FALSE)
+rm(logreg.0,explo_20)
+```
+
+```{r functions,echo = FALSE}
+## TWO FUNCTIONS TO USE FOR MODEL TESTING 
+
+# 1. cross-validation function
+# accepts regressors, and number of folds,
+# and conducts cross validation with a logreg model.
+crval <- function(nfold = 5, 
+                  regressand = "V_IM240",
+                  rawdata = model_60,
+                   x) {
+  fmla <- as.formula(paste0(regressand,
+                            "~ ",
+                            paste(x,
+                                  collapse = '+')))
+  breaks  <- rep(c(1:nfold),length.out = nrow(rawdata))
+  set.seed(100)
+  breaks <- sample(breaks)
+  yhat <- vector(length = 0)
+  y <- vector(length = 0)
+  
+  for(i in 1:nfold){
+    test_set <- filter(model_60, breaks == i)
+    train_set <- filter(model_60, breaks != i)
+    
+    logreg <- glm(fmla, data = train_set,
+                     family = binomial(link = "logit"))
+    
+    y <- c(y,test_set$V_IM240)
+    yhat <- c(yhat, predict(logreg, newdata = test_set,
+                            type = "response"))
+  }
+  
+  mod <- cbind(y,yhat)
+  return(mod)
+}
+# 2.find  threshold for best accuracy
+#based on code from:
+#https://stat.ethz.ch/pipermail/r-help//2009-March/419385.html
+peak <- function(pred){
+  perf.acc<-performance(pred,"acc") #find list of accuracies
+  acc.rocr<-max(perf.acc@y.values[[1]])   # accuracy using rocr
+  cutoff.list.acc <- unlist(perf.acc@x.values[[1]])
+  optimal <- cutoff.list.acc[which.max(perf.acc@y.values[[1]])]
+  return(optimal)
+}
+
+```
+
+```{r hyp-test,  echo = FALSE, warning = FALSE, message = FALSE}
+#testing our six models on the middle 60% of the dataset
+model_60 <- read_csv(paste0(files.loc,"test_60.csv"))
+
+model_60 <- filter(model_60, model_60$V_AGE > 0)
+#VERY small # of entries have age 0
+#Removing so that we can introduce the ODO/AGE interaction term
+
+reg.models <- read_csv(paste0(files.loc,"regression_models.csv"))
+#csv contains 6 columns, each with the list of regressor variables for a model
+
+#feed the regressors to the crval function for each model
+# combine resulting y/y-hat values into a dataframe, res_all
+for(j in 1:ncol(reg.models)){
+  regressor <- reg.models[,j]
+  regressor <- filter(regressor,regressor != "")
+  if(j!=1){regressor <-  as.matrix(regressor)}
+  result <- crval(x = regressor)
+  colnames(result) <- c("Y",paste0("Y_HAT_MODEL_",j))
+  if(j == 1){
+    res_all <- result
+  }
+  if(j > 1){
+    res_all <- cbind(res_all,result)
+  }
+}
+
+```
+
+
+```{r plot-rocs, echo = F,dpi = 70, fig.height = 5.5}
+
+#loop through predictions for each value, calculate model metrics,
+# and plot cross-validated ROC
+colors <- c("grey50","blue", "green","yellow","brown","cyan")
+labels <- c("Model I","Model II","Model III","Model IV",
+            "Model V","Model VI")
+Accuracy <-  vector(length = 7)
+AUC <- vector(length = 7)
+par(mfrow = c(1,1))
+for(p in 1:6)
+{
+  y <- res_all[,((2*p) - 1)]
+  yhat <- res_all[,(2*p)]
+  error <- prediction(yhat,y)
+  perf <- performance(error, measure="tpr", x.measure="fpr")
+  arcurve <- performance(error, measure = "auc")
+  AUC[p] <- round(arcurve@y.values[[1]], digits = 4)
+  thresh <-  peak(error)
+  cm <- confusionMatrix((yhat >= thresh)*1,y)
+  Accuracy[p] <- cm$overall[[1]]
+  
+  if(p == 1){
+    conf.res <- cm$byClass
+    plot(perf, 
+     main = "",
+     avg = 'threshold', 
+     spread.estimate = 'stddev',
+     colorize = FALSE,
+     col = colors[p],
+     text.adj = c(-.5, 1.2), 
+     xlab = "Average False Positive Rate", 
+     ylab = "Average True Positive Rate",
+     lwd = 1.5) 
+     abline(0,1,col="red") 
+  }
+  
+  if (p > 1){
+    conf.res <- cbind(conf.res,cm$byClass)
+    plot(perf, 
+     avg = 'threshold', 
+     spread.estimate = 'stddev',
+     colorize = FALSE,
+     col = colors[p],
+     text.adj = c(-.5, 1.2), 
+     lwd = 2,
+     add = TRUE) 
+  }
+  
+}
+legend(0.80,0.40,legend = labels,fill= colors)
+```
+
+```{r print-metrics, echo = FALSE}
+#print model metrics for each of seven models
+metrics <- rbind(AUC, Accuracy,conf.res)
+colnames(metrics) <- labels
+metrics <- metrics[c(1:4,7,8),]
+kable(metrics,digits = 4,
+      caption= "Performance Metrics: Logistic Regression Models")
+```
+
+```{r finalpred}
+#conduct final prediction with model 2
+
+regressor <- reg.models[,2]
+regressor <- filter(regressor,regressor != "")
+regressor <-  as.matrix(regressor)
+fmla <- as.formula(paste0("V_IM240 ~ ",
+                            paste(regressor, collapse = '+')))
+
+#build the logit model training on the full 60% dataset
+logreg.final <- glm(fmla, data = model_60,
+                     family = binomial(link = "logit"))
+
+predict_20 <- read_csv(paste0(files.loc,"explo_20.csv"))
+predict_20 <-  filter(predict_20, predict_20$V_AGE > 0)
+y <- predict_20$V_IM240
+#make predictions based on the final model
+yhat <- predict(logreg.final, newdata = predict_20,
+                            type = "response")
+
+#looking at some metrics for OBD as a predictor of IM240  in this last 20%
+cmbaseline <- confusionMatrix(predict_20$V_OBD_MIL,predict_20$V_IM240)
+t1 <- cmbaseline$byClass
+t1 <- t1[c(1,2,5,6)]
+kable(t1)
+
+# looking at the predicted values from our model
+error <- prediction(yhat,y)
+perf <- performance(error, measure="tpr", x.measure="fpr")
+arcurve <- performance(error, measure = "auc")
+AUC <- round(arcurve@y.values[[1]], digits = 4)
+thresh <-  peak(pred=error)
+cm <- confusionMatrix((yhat >= thresh)*1,y)
+Accuracy <- cm$overall[[1]]
+
+# ROC Curve - so many colors
+plot(perf, 
+     main = "",
+     avg = 'threshold', 
+     spread.estimate = 'stddev',
+     colorize = TRUE,
+     print.cutoffs.at = seq(0.3,0.7, by = 0.05),
+     text.adj = c(-.5, 1.2), 
+     xlab = "Average False Positive Rate", 
+     ylab = "Average True Positive Rate",
+     lwd = 1.5) 
+     abline(0,1) 
+     
+
+
+     
+```
+
+```{r sensspec}
+# plotting the TPR vs FPR trade-off graph and table
+# for Appendix C
+thresholds <- c(0:40)
+thresholds <- 0.025*thresholds
+sens <- vector(length = 21)
+spec <- vector(length = 21)
+
+for (i in c(1:41)){
+  p <- thresholds[i]
+  cm <- confusionMatrix((yhat >= p)*1,y)
+  sens[i] <- cm$byClass[[1]]
+  spec[i] <- 1-cm$byClass[[2]]
+}
+
+plot(thresholds,sens,
+     xlab="Cut Off Probability",
+     xlim=c(0,1),
+     ylim=c(0,1),
+     type="l",
+     ylab="TPR/FPR",
+     col = "green",
+     lwd = 2)
+
+lines(thresholds,spec,col = "blue")
+legend(0.80,0.60,legend = c("TPR","FPR"),
+       fill= c("green","blue"), lwd = 2)
+tab <- cbind(thresholds,sens,spec)
+tab <- tab[c(10:30),]
+colnames(tab) <- c("Cutpoint","TPR","FPR")
+
+```
